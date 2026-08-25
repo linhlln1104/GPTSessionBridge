@@ -1,6 +1,6 @@
 # Security Policy
 
-GPTSessionBridge is pre-alpha and has not received an independent security audit. The Phase 2 facade, authenticated Windows IPC, browser-session coordinator, Native Messaging runtime, and least-privilege MV3 shell are implemented and synthetically tested. Native-host packaging, the ChatGPT Web adapter, and Responses integration are not. The `main` branch is the only supported development line. No release should be treated as production-ready until this policy explicitly says otherwise.
+GPTSessionBridge is pre-alpha and has not received an independent security audit. The Phase 2 facade, authenticated Windows IPC, browser-session coordinator, Native Messaging runtime, least-privilege MV3 shell, and unsigned per-user Windows development package are implemented and tested. The ChatGPT Web adapter, Responses integration, protected production installation, and code signing are not. The `main` branch is the only supported development line. No release should be treated as production-ready until this policy explicitly says otherwise.
 
 ## Reporting a vulnerability
 
@@ -15,6 +15,11 @@ Include only the minimum synthetic reproduction needed to understand the problem
 - The browser extension connects only after an explicit user action and revalidates the selected tab and document across asynchronous browser operations.
 - Browser permissions are limited to `activeTab`, `scripting`, and `nativeMessaging`; there are no persistent host, cookie, debugger, history, or storage permissions.
 - The Native Messaging host accepts one exact canonical extension origin; wildcard origins are rejected.
+- Development registration uses the separate `com.gptsessionbridge.native_host.dev` HKCU identity so it cannot shadow a future production host name. Setup accepts no caller-supplied extension identity or host name.
+- The development installer verifies a complete content-hash manifest, rejects links and path traversal, copies into a content-addressed user-local directory, refuses unmanaged ownership in either Chrome registry view, and registers only after the package and generated Chrome manifest are verified.
+- Development setup reconciles the lower-precedence 64-bit view before the Chrome-effective 32-bit view and verifies both final values. Supported Windows versions share `HKCU\Software` across views, so an exact-path change in one view may safely converge the other; foreign or different values still fail closed.
+- Registry commands are not atomic; detected conflicts fail closed, private staging is removed, and promoted content-addressed artifacts are always retained because another installer may already have adopted them.
+- Development uninstall verifies both views, clears 64-bit first, conditionally clears 32-bit if it remains, verifies both absent, and retains content-addressed files. It never edits Chrome profiles or extension state.
 - Native Messaging frames are schema-checked, direction-checked, sequence-checked, and limited to 1 MiB on both links.
 - Transport frames terminate at the native host. Relayed application frames receive a new link-local sequence.
 - A protocol `hello` is never accepted as proof of local-process identity.
@@ -32,9 +37,11 @@ Include only the minimum synthetic reproduction needed to understand the problem
 - Resume/fork sources are quarantined until their lifecycle identity is validated; server requests and pipelined thread operations cannot cross that boundary. Lifecycle notifications without a request identifier are dropped because they cannot be correlated with a validating response.
 - A successful resume must return the requested thread identifier. A successful fork must return a new thread identifier and name the requested source in `thread.forkedFromId`.
 - A thread identifier returned with an invalid lifecycle identity is tombstoned in bounded memory and the facade session terminates, preventing continued execution in an untrusted routing state.
-- Diagnostics exclude prompts, responses, browser content, paths, configuration payloads, and credentials.
+- Runtime diagnostics exclude prompts, responses, browser content, paths, configuration payloads, and credentials. The interactive setup CLI returns only the installed artifact paths required to load or inspect the development package.
 - The bridge does not add persistent storage for Web route metadata or conversation content, and telemetry is disabled by default. The official Codex child remains responsible for its normal thread storage according to the request and Codex configuration.
 
 In the current runtime, an authenticated request to the local Responses endpoint returns `session_not_connected`. This remains the expected terminal state until a reviewed Responses adapter can preserve the coordinator's pinned session and `catalogRevision`; the facade must not simulate a Web response or route the request to native Codex.
+
+The unsigned development package is writable by the current user and does not establish executable identity against another process already running as that user. Same-user registry mutation cannot be made transactional through `reg.exe` and remains outside this trust boundary. Production distribution requires a protected installation location, reserved release extension/host identities, code signing, and a separately reviewed installer.
 
 See [docs/security-model.md](docs/security-model.md) for the threat model.

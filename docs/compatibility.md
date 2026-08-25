@@ -10,7 +10,7 @@ GPTSessionBridge relies on integration surfaces that can change independently: t
 - Virtual-model collisions are rejected when the relevant native catalog page is observed.
 - Versioned bridge-owned boundaries reject incompatible protocol revisions; the facade does not claim a startup compatibility gate for the upstream app-server protocol.
 - Unsupported browser capabilities and stale model catalogs fail closed.
-- Installation changes are journaled and reversible.
+- Development registration is ownership-checked, precedence-aware, and conservatively recoverable; it is not an atomic registry transaction.
 
 The Codex app-server command and some transports are documented as experimental. See the official [app-server documentation](https://learn.chatgpt.com/docs/app-server). The executable override used by IDE clients is a development setting, so each release must publish a tested compatibility matrix rather than promise unrestricted forward compatibility.
 
@@ -22,7 +22,7 @@ The following development snapshot was tested on 2026-08-25:
 
 | Component        | Tested value        | Scope                                                           |
 | ---------------- | ------------------- | --------------------------------------------------------------- |
-| Operating system | Windows x64         | Facade, loopback Responses stub, and authenticated pipe helper  |
+| Operating system | Windows x64         | Facade, Responses stub, pipe helper, SEA package, and setup CLI |
 | Codex CLI        | `0.149.0-alpha.4.3` | Official `codex app-server` child                               |
 | Node.js          | `24.18.1`           | Workspace build, tests, facade, and smoke test                  |
 | .NET SDK         | `10.0.301`          | Helper build, tests, formatting, audit, and single-file publish |
@@ -36,8 +36,11 @@ Verified behavior in this snapshot:
 - Windows integration tests verify one-instance pipe ownership, a logon-session DACL, remote-client rejection, mutual peer identity checks, bounded accept lifetime, and full-duplex framed relay.
 - Synthetic tests verify the Native Messaging framing, strict origin policy, per-link handshake and sequence rules, direction-aware relay, coordinator correlation/lifecycle, bounded queues, and write backpressure.
 - MV3 tests and build gates verify exact active-document selection, disconnect race handling, a strict browser-safe protocol parser, and the absence of dynamic-code constructs in the extension output.
+- Windows packaging verifies a clean Node 24 SEA Native Host, adjacent self-contained helper, exact development manifest identity, complete artifact hashes, absence of the local repository path, and a bidirectional packaged-relay smoke with empty child environments.
+- Setup tests cover bounded package traversal, links, case collisions, changed files, dual-view shadowing and shared-view convergence, ownership conflicts, detected read/write races, retained ambiguous state, status, and conservative unregister behavior without changing the machine registry.
+- The opt-in Windows CI smoke verifies initially empty 32-bit and 64-bit HKCU development keys through install, status, and uninstall; it refuses to replace any pre-existing registration.
 
-This matrix does not claim IDE-extension, macOS, Linux, installed Chrome Native Messaging, real-account, or ChatGPT Web compatibility. Tests do not register or launch a Chrome host. The synthetic model is a development fixture, not a supported model route.
+This matrix does not claim IDE-extension, macOS, Linux, automated real-Chrome launch, real-account, or ChatGPT Web compatibility. Verification launches the packaged Native Host directly through Chrome-compatible argv and framing but does not register it or start Chrome. The synthetic model is a development fixture, not a supported model route.
 
 ## Current restrictions
 
@@ -51,7 +54,8 @@ This matrix does not claim IDE-extension, macOS, Linux, installed Chrome Native 
 - Client notifications pass through the same thread and configuration guards as requests. Request-only lifecycle, initialization, and catalog operations are dropped when sent without an identifier.
 - The local provider is not connected to `BrowserSessionCoordinator` and therefore returns `session_not_connected` even if the authenticated IPC listener is running.
 - Only one facade can own the deterministic browser IPC listener in a Windows logon session. Additional facades continue to support native Codex, but their Web route remains unavailable; no provider fallback occurs.
-- The Native Host exists as a tested source runtime but is not packaged as a Chrome-launchable executable or registered/installed. The extension manifest is a development build and is not distributed through the Chrome Web Store.
+- The Native Host and unpacked extension are available only as an unsigned Windows x64 development package. Per-user setup uses the `.dev` host identity and a user-writable content-addressed directory; it is not a production installer or a Chrome Web Store distribution.
+- Registry output decoding is tested for ASCII, UTF-8, and UTF-16LE. A non-ASCII local-app-data path emitted through an undecodable legacy Windows console code page fails closed and is not currently claimed as supported.
 - The extension connection shell has no ChatGPT DOM adapter. It advertises an unavailable catalog and rejects every turn without touching credentials or undocumented backend endpoints.
 - Native protocol v1 supports text input only and advertises no image or tool-call capability. A future Responses adapter must reject richer input rather than strip or reinterpret it.
 

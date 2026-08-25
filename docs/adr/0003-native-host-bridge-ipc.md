@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-25
-- Implementation: Windows x64 source runtime and helper complete; packaging and signing remain separate release gates
+- Implementation: Windows x64 runtime, helper, and unsigned development package complete; protected production installation and signing remain separate release gates
 
 ## Context
 

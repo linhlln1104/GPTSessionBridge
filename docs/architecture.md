@@ -4,7 +4,7 @@
 
 GPTSessionBridge lets a Codex client create a thread backed by a ChatGPT Web model without moving the user's ChatGPT login into the bridge. It integrates at the Codex app-server boundary and uses a browser extension to operate only a tab the user explicitly connected.
 
-Phase 2 implements the app-server facade, synthetic model catalog, thread routing, official Codex child lifecycle, and authenticated local Responses stub. Phase 3a implements the Native Messaging transport and relay state machine. The current Phase 3b increment adds authenticated Windows host-to-bridge IPC, `BrowserSessionCoordinator`, the Native Host runtime, and an explicit-tab Manifest V3 connection shell. Native-host packaging, the ChatGPT page adapter, and the Responses adapter remain future work. Consequently, a valid Web request currently terminates with `session_not_connected` rather than a simulated response.
+Phase 2 implements the app-server facade, synthetic model catalog, thread routing, official Codex child lifecycle, and authenticated local Responses stub. Phase 3a implements the Native Messaging transport and relay state machine. Phase 3b adds authenticated Windows host-to-bridge IPC, `BrowserSessionCoordinator`, the Native Host runtime, and an explicit-tab Manifest V3 connection shell. The current Phase 3c increment adds a self-contained Windows development package and conservative per-user host registration. The ChatGPT page adapter and Responses adapter remain future work. Consequently, a valid Web request currently terminates with `session_not_connected` rather than a simulated response.
 
 ## Components
 
@@ -39,7 +39,11 @@ The host owns two independent protocol links: one to the extension and one to th
 
 The runtime validates one exact canonical Chrome extension origin before reading extension traffic. Only after the extension-side handshake is ready does it start the Windows IPC client. The bridge owns the deterministic pipe listener through a self-contained .NET helper implementing [ADR 0003](adr/0003-native-host-bridge-ipc.md); both helper processes mutually verify the peer's Windows user SID, logon SID, and session before relaying framed bytes. The bridge then initiates a fresh link handshake and attaches the authenticated application port to `BrowserSessionCoordinator`.
 
-The source runtime is not yet packaged as a Chrome-launchable executable, registered in the Windows Native Messaging registry, installed, or signed. Those distribution steps remain a release gate rather than being simulated by a development script.
+The Windows x64 development build bundles the TypeScript runtime into CommonJS, injects it into the pinned Node 24 executable using Node's Single Executable Application format, and places the self-contained IPC helper beside it. The artifact also contains the unpacked extension and a canonical manifest covering every file by size and SHA-256. Verification rejects extra files, links, case-colliding paths, traversal, changed content, local repository paths, and a development extension or Native Host manifest outside the exact package policy. A packaged-relay smoke starts the actual SEA executable and adjacent helper with empty environments from an empty temporary working directory and verifies framed traffic in both directions.
+
+Per-user setup copies only a verified artifact into a content-addressed directory below local application data and generates a Chrome manifest with an absolute executable path. It inspects both HKCU Chrome Native Messaging registry views, refuses unmanaged or inconsistent values, reconciles the lower-precedence 64-bit view before the Chrome-effective 32-bit view, and verifies the final snapshot under the development-only `com.gptsessionbridge.native_host.dev` identity. Supported Windows versions share `HKCU\Software` across WOW64 views, so an exact target produced through one view may safely converge the other. `reg.exe` does not provide an atomic compare-and-swap, so different values and detected conflicts fail closed. Private staging is removed on failure, while promoted content-addressed artifacts are always retained because another concurrent installer may already have adopted them. Status and uninstall use the same ownership proof; uninstall clears 64-bit first, conditionally clears 32-bit if it remains, verifies both absent, and retains package files conservatively. Setup never mutates Chrome profiles or extension state.
+
+This development flow is not a production installer. The artifact is unsigned and stored in a user-writable location, and automated verification does not claim real-Chrome or real-account compatibility. A protected per-machine install, code signing, release identities, and production-installer rollback remain release gates.
 
 The deterministic pipe permits one Web-enabled facade per Windows logon session. Listener acquisition is an optional browser capability, not a prerequisite for the official Codex child: a missing helper, unsupported architecture, or already-owned pipe disables Web transport for that facade while native Codex traffic continues unchanged. Web requests still terminate at the bridge boundary and are never rerouted to native usage.
 
@@ -68,6 +72,7 @@ apps/bridge -----------+----> packages/core
 apps/native-host ------+----> packages/protocol
 apps/browser-extension-+
                        +----> packages/native-messaging
+apps/windows-setup ---------> Windows package and registry boundaries
 
 Future Responses integration:
 

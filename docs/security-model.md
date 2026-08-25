@@ -30,7 +30,13 @@ The Native Messaging runtime enforces an exact extension-origin allowlist, a sym
 
 On Windows, [ADR 0003](adr/0003-native-host-bridge-ipc.md) is implemented by a self-contained helper on each side of a one-instance named pipe. The server uses a protected logon-SID DACL, granular rights, first-instance ownership, and remote-client rejection. Before relaying bytes, both sides compare the pipe peer's PID/session with a retained process handle and token user SID, logon SID, and session ID. The bridge then initiates a fresh random link handshake. The pipe name and challenge are public freshness/discovery metadata, not bearer credentials.
 
-This authenticates the Windows user and logon session, not executable integrity. Same-user code already running in the same logon session, administrators, `SYSTEM`, kernel compromise, and browser compromise remain outside this boundary. Packaging, ACL-protected installation, and signing are required before production distribution.
+This authenticates the Windows user and logon session, not executable integrity. Same-user code already running in the same logon session, administrators, `SYSTEM`, kernel compromise, and browser compromise remain outside this boundary. The development SEA package and content hashes detect post-manifest mutation and copy corruption, not a compromised or incorrect build; they are not a signature or a protected installation identity. ACL-protected installation and signing remain required before production distribution.
+
+### Development setup boundary
+
+The Windows development package uses a host name ending in `.dev`, separate from any future production registration. Its manifest pins the exact public development extension origin. Per-user setup verifies the complete package manifest, rejects links and path escape, copies to a content-addressed directory below local application data, and materializes an absolute executable path. It inspects both HKCU Chrome Native Messaging views, rejects foreign or inconsistent ownership, reconciles 64-bit before Chrome's higher-precedence 32-bit view, and verifies both final paths. Because supported Windows versions share `HKCU\Software` across WOW64 views, an exact target written through one view may legitimately satisfy the other and is treated as safe convergence.
+
+Those `reg.exe` read/write steps are deliberately treated as non-atomic. A detected conflict fails closed. Setup removes only private staging on failure and always retains promoted package and registration artifacts rather than risking removal of paths another successful invocation has already adopted. Uninstall clears 64-bit first, conditionally clears 32-bit if the shared-view operation did not already do so, verifies both absent, and deliberately retains package files. Setup never edits Chrome profiles, loads or removes extensions, or starts a browser. Because the package remains user-writable and unsigned, these controls provide reversible development setup and corruption detection, not defense against same-user code execution or concurrent registry mutation by that user.
 
 The capability lifecycle is:
 
@@ -49,6 +55,8 @@ The capability lifecycle is:
 | Credential extraction       | No cookie/debugger permissions; no credential fields in protocols or logs    |
 | Local process impersonation | Responses capability; logon-SID pipe DACL and mutual peer-token verification |
 | Extension impersonation     | Pinned extension identity, exact allowlist, and runtime caller-origin check  |
+| Development host collision  | Separate `.dev` identity; refuse unmanaged HKCU registry ownership           |
+| Package corruption          | Complete SHA-256/size manifest; reject extra files, links, and path escape   |
 | Prompt or response leakage  | Memory-only processing; content-free diagnostics; synthetic fixtures         |
 | Provider confusion          | Pin the provider, model, reasoning effort, and catalog revision per thread   |
 | Silent quota crossover      | Explicit errors; no automatic Codex/Web fallback                             |
@@ -61,7 +69,7 @@ The capability lifecycle is:
 
 ## Diagnostics
 
-Production diagnostics use an allowlisted event schema. They may contain a component name, event name, opaque correlation identifier, status, duration, and byte counts. They must not contain arbitrary request parameters, results, prompts, responses, configuration objects, browser content, credentials, account identifiers, or paths.
+Production runtime diagnostics use an allowlisted event schema. They may contain a component name, event name, opaque correlation identifier, status, duration, and byte counts. They must not contain arbitrary request parameters, results, prompts, responses, configuration objects, browser content, credentials, account identifiers, or paths. The interactive development setup CLI separately returns the installed executable, manifest, and unpacked-extension paths required for local operation; it never returns browser or account data.
 
 Debug mode does not relax these rules. A future support bundle must be opt-in, time-limited, scrubbed, and previewable before export.
 
