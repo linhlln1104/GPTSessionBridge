@@ -1,0 +1,35 @@
+{
+  "name": "@gpt-session-bridge/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Versioned wire contracts for GPTSessionBridge.",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
