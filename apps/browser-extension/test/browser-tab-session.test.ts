@@ -37,7 +37,7 @@ describe("BrowserTabSession", () => {
       protocolVersion: 1,
       type: "page/ready",
     });
-    expect(harness.nativeApplication).toBe("com.gptsessionbridge.native_host");
+    expect(harness.nativeApplication).toBe("com.gptsessionbridge.native_host.dev");
     expect(harness.nativeFrame(0)).toMatchObject({
       sequence: 0,
       type: "hello",

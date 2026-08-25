@@ -1,6 +1,6 @@
 {
-  "name": "com.gptsessionbridge.native_host",
-  "description": "GPTSessionBridge Native Messaging host",
+  "name": "com.gptsessionbridge.native_host.dev",
+  "description": "GPTSessionBridge Native Messaging host (development)",
   "path": "__GPTSESSIONBRIDGE_NATIVE_HOST_EXECUTABLE__",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://bhladcjpjnimikahacopaghedecjmjfn/"]

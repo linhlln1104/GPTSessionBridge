@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
 import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { isSea } from "node:sea";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Readable, Writable } from "node:stream";
 
 import {
+  BRIDGE_IMPLEMENTATION_VERSION,
   DEVELOPMENT_EXTENSION_ORIGIN,
   NativeLinkError,
 } from "@gpt-session-bridge/native-messaging/link";
@@ -14,7 +17,6 @@ import { ExtensionOriginError } from "./runtime/extension-origin.js";
 import { NativeHostRuntime, type WindowsIpcClientHelper } from "./runtime/native-host-runtime.js";
 
 const FAILURE_EXIT_CODE = 1;
-const NATIVE_HOST_IMPLEMENTATION_VERSION = "0.1.0";
 const WINDOWS_PARENT_ARGUMENT_PATTERN = /^--parent-window=[0-9]{1,20}$/u;
 
 export type NativeHostCliErrorCode =
@@ -51,7 +53,7 @@ export async function runNativeHost(
     extensionInput: options.extensionInput ?? process.stdin,
     extensionOutput: options.extensionOutput ?? process.stdout,
     helperExecutable,
-    implementationVersion: NATIVE_HOST_IMPLEMENTATION_VERSION,
+    implementationVersion: BRIDGE_IMPLEMENTATION_VERSION,
   });
   await runtime.run();
 }
@@ -69,24 +71,35 @@ export function parseChromeInvocation(args: readonly string[]): string {
 }
 
 export function resolveWindowsIpcHelperExecutable(
-  anchorUrl: string,
+  anchorUrl: string | undefined,
   platform: NodeJS.Platform = process.platform,
   architecture: string = process.arch,
   fileExists: (path: string) => boolean = existsSync,
+  packagedExecutable: string = process.execPath,
+  packaged: boolean = isSea(),
 ): string {
   if (platform !== "win32" || architecture !== "x64") {
     throw new NativeHostCliError("unsupported_platform");
   }
-  const candidate = fileURLToPath(
+  const candidate = packaged
+    ? resolve(dirname(packagedExecutable), "gptsessionbridge-windows-ipc.exe")
+    : resolveDevelopmentHelper(anchorUrl);
+  if (!fileExists(candidate)) {
+    throw new NativeHostCliError("helper_unavailable");
+  }
+  return candidate;
+}
+
+function resolveDevelopmentHelper(anchorUrl: string | undefined): string {
+  if (anchorUrl === undefined) {
+    throw new NativeHostCliError("helper_unavailable");
+  }
+  return fileURLToPath(
     new URL(
       "../../../native/windows-ipc/artifacts/win-x64/gptsessionbridge-windows-ipc.exe",
       anchorUrl,
     ),
   );
-  if (!fileExists(candidate)) {
-    throw new NativeHostCliError("helper_unavailable");
-  }
-  return candidate;
 }
 
 function isDirectExecution(entry: string | undefined): boolean {
@@ -105,9 +118,9 @@ function readSafeErrorCode(error: unknown): string {
   return "native_host_failure";
 }
 
-async function main(): Promise<void> {
+export async function runNativeHostProcess(args = process.argv.slice(2)): Promise<void> {
   try {
-    await runNativeHost(process.argv.slice(2));
+    await runNativeHost(args);
   } catch (error) {
     process.stderr.write(`GPTSessionBridge native host failed (${readSafeErrorCode(error)}).\n`);
     process.exitCode = FAILURE_EXIT_CODE;
@@ -115,5 +128,5 @@ async function main(): Promise<void> {
 }
 
 if (isDirectExecution(process.argv[1])) {
-  void main();
+  void runNativeHostProcess();
 }

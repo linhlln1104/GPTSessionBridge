@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { BRIDGE_IMPLEMENTATION_VERSION } from "@gpt-session-bridge/native-messaging/link";
+
 import { BrowserSessionCoordinator } from "../browser/browser-session-coordinator.js";
 import { BridgeRuntimeError } from "./errors.js";
 import { WindowsBrowserIpcBroker } from "./windows-browser-ipc-broker.js";
-
-const BRIDGE_IMPLEMENTATION_VERSION = "0.1.0";
 
 export interface BrowserIpcRuntime {
   readonly completion: Promise<void>;

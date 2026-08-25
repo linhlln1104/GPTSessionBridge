@@ -1,11 +1,11 @@
 {
-  "name": "@gpt-session-bridge/native-host",
+  "name": "@gpt-session-bridge/windows-setup",
   "version": "0.1.0",
   "private": true,
-  "description": "Bounded Chrome Native Messaging transport for GPTSessionBridge.",
+  "description": "Conservative per-user Windows development installer for GPTSessionBridge.",
   "type": "module",
   "bin": {
-    "gptsessionbridge-native-host": "dist/cli.js"
+    "gptsessionbridge-windows-setup": "dist/cli.js"
   },
   "sideEffects": false,
   "files": [
@@ -22,10 +22,6 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
-  },
-  "dependencies": {
-    "@gpt-session-bridge/native-messaging": "workspace:*",
-    "@gpt-session-bridge/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

@@ -52,7 +52,7 @@ const BRIDGE_ERROR_CODES = Object.freeze({
 
 /**
  * Owns one user-selected document and one native port. It deliberately exposes
- * no DOM automation: the Phase 3b skeleton reports an unavailable adapter and
+ * no DOM automation: the current shell reports an unavailable adapter and
  * fails every turn closed until a separately reviewed adapter is installed.
  */
 export class BrowserTabSession {

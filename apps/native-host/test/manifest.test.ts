@@ -14,7 +14,7 @@ describe("Chrome Native Messaging manifest template", () => {
 
     expect(manifest).toEqual({
       allowed_origins: [DEVELOPMENT_EXTENSION_ORIGIN],
-      description: "GPTSessionBridge Native Messaging host",
+      description: "GPTSessionBridge Native Messaging host (development)",
       name: NATIVE_MESSAGING_HOST_NAME,
       path: "__GPTSESSIONBRIDGE_NATIVE_HOST_EXECUTABLE__",
       type: "stdio",

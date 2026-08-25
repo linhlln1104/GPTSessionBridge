@@ -10,7 +10,13 @@ const typedConfigs = [
 
 export default tseslint.config(
   {
-    ignores: ["**/coverage/**", "**/dist/**", "**/node_modules/**", "**/*.tsbuildinfo"],
+    ignores: [
+      "artifacts/**",
+      "**/coverage/**",
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/*.tsbuildinfo",
+    ],
   },
   {
     ...eslint.configs.recommended,

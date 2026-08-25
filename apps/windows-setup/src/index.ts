@@ -1,0 +1,65 @@
+export {
+  DEVELOPMENT_EXTENSION_ID,
+  DEVELOPMENT_EXTENSION_MANIFEST_PATH,
+  DEVELOPMENT_EXTENSION_ORIGIN,
+  DEVELOPMENT_HELPER_EXECUTABLE_PATH,
+  DEVELOPMENT_HOST_EXECUTABLE_PATH,
+  DEVELOPMENT_HOST_TEMPLATE_PATH,
+  DEVELOPMENT_NATIVE_HOST_NAME,
+  NATIVE_HOST_EXECUTABLE_PLACEHOLDER,
+  PACKAGE_MANIFEST_FILENAME,
+  PACKAGE_MANIFEST_SCHEMA_VERSION,
+} from "./constants.js";
+export {
+  NODE_FILE_SYSTEM,
+  POSIX_PATHS,
+  WINDOWS_PATHS,
+  createDefaultWindowsPlatform,
+  createPathDependencies,
+  type FileHash,
+  type FileSystemDirectoryEntry,
+  type FileSystemNode,
+  type PackageIoDependencies,
+  type PathDependencies,
+  type WindowsSetupFileSystem,
+  type WindowsSetupPlatform,
+} from "./dependencies.js";
+export { WindowsSetupError, type WindowsSetupErrorCode } from "./errors.js";
+export { verifyWindowsDevelopmentPackage } from "./development-package.js";
+export {
+  createWindowsPackageManifest,
+  parseWindowsPackageManifest,
+  serializeWindowsPackageManifest,
+  verifyWindowsPackage,
+  writeWindowsPackageManifest,
+  type VerifiedWindowsPackage,
+  type WindowsPackageFile,
+  type WindowsPackageManifest,
+  type WindowsPackageManifestMetadata,
+} from "./package-manifest.js";
+export {
+  SpawnCommandRunner,
+  WindowsCurrentUserChromeRegistry,
+  type CommandResult,
+  type CommandRunner,
+  type NativeMessagingRegistry,
+  type SpawnCommandRunnerOptions,
+  type WindowsRegistryOptions,
+  type WindowsRegistryView,
+} from "./registry.js";
+export {
+  createChromeNativeMessagingManifest,
+  getWindowsDevelopmentHostStatus,
+  installWindowsDevelopmentHost,
+  serializeChromeNativeMessagingManifest,
+  uninstallWindowsDevelopmentHost,
+  type ChromeNativeMessagingManifest,
+  type InstalledWindowsSetupStatus,
+  type NotInstalledWindowsSetupStatus,
+  type UnmanagedWindowsSetupStatus,
+  type WindowsInstallResult,
+  type WindowsRegistryPaths,
+  type WindowsSetupDependencies,
+  type WindowsSetupStatus,
+  type WindowsUninstallResult,
+} from "./setup-service.js";

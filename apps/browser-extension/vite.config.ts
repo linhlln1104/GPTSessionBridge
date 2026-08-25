@@ -16,7 +16,7 @@ export default defineConfig({
         "popup/popup": resolve(import.meta.dirname, "src/popup/popup.ts"),
       },
       output: {
-        chunkFileNames: "chunks/[name]-[hash].js",
+        chunkFileNames: "chunks/[name].js",
         entryFileNames: "[name].js",
         format: "es",
       },

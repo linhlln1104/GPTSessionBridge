@@ -63,6 +63,24 @@ describe("native host CLI", () => {
     expect(() =>
       resolveWindowsIpcHelperExecutable(import.meta.url, "win32", "x64", () => false),
     ).toThrow(expect.objectContaining<Partial<NativeHostCliError>>({ code: "helper_unavailable" }));
+
+    let packagedCandidate = "";
+    expect(
+      resolveWindowsIpcHelperExecutable(
+        undefined,
+        "win32",
+        "x64",
+        (path) => {
+          packagedCandidate = path;
+          return true;
+        },
+        "C:/Program Files/GPTSessionBridge/gptsessionbridge-native-host.exe",
+        true,
+      ),
+    ).toBe(packagedCandidate);
+    expect(packagedCandidate.replaceAll("\\", "/")).toBe(
+      "C:/Program Files/GPTSessionBridge/gptsessionbridge-windows-ipc.exe",
+    );
   });
 
   it("validates the caller before reading an otherwise empty Chrome channel", async () => {
