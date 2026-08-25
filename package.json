@@ -10,14 +10,16 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "build": "pnpm --recursive --if-present build",
+    "build": "pnpm --recursive --if-present build && pnpm build:windows-ipc",
+    "build:windows-ipc": "node scripts/build-windows-ipc.mjs",
     "build:workspace-deps": "pnpm --filter @gpt-session-bridge/protocol --filter @gpt-session-bridge/core --filter @gpt-session-bridge/native-messaging --if-present build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "pnpm build:workspace-deps && eslint . --max-warnings=0",
     "smoke:app-server": "pnpm build && node scripts/smoke-app-server.mjs",
-    "test": "pnpm build:workspace-deps && pnpm --recursive --if-present test",
-    "test:coverage": "pnpm build:workspace-deps && pnpm --recursive --if-present test:coverage",
+    "test": "pnpm build:workspace-deps && pnpm --recursive --if-present test && pnpm test:windows-ipc",
+    "test:coverage": "pnpm build:workspace-deps && pnpm --recursive --if-present test:coverage && pnpm test:windows-ipc",
+    "test:windows-ipc": "node scripts/test-windows-ipc.mjs",
     "typecheck": "pnpm build:workspace-deps && tsc --noEmit -p tsconfig.json && pnpm --recursive --if-present typecheck",
     "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm build"
   },

@@ -3,6 +3,10 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+**/bin/
+**/obj/
+**/TestResults/
+native/windows-ipc/artifacts/
 
 # Local tools and editors
 .idea/

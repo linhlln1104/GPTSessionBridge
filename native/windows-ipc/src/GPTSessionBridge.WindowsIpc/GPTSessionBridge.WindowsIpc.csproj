@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>gptsessionbridge-windows-ipc</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>GPTSessionBridge.WindowsIpc</RootNamespace>
+    <TargetFramework>net10.0-windows</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="GPTSessionBridge.WindowsIpc.Tests" />
+  </ItemGroup>
+</Project>

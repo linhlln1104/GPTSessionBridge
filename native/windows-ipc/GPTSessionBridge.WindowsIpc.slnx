@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/GPTSessionBridge.WindowsIpc/GPTSessionBridge.WindowsIpc.csproj" />
+  <Project Path="test/GPTSessionBridge.WindowsIpc.Tests/GPTSessionBridge.WindowsIpc.Tests.csproj" />
+</Solution>

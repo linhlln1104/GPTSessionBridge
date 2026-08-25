@@ -4,6 +4,9 @@
   "private": true,
   "description": "Bounded Chrome Native Messaging transport for GPTSessionBridge.",
   "type": "module",
+  "bin": {
+    "gptsessionbridge-native-host": "dist/cli.js"
+  },
   "sideEffects": false,
   "files": [
     "dist"

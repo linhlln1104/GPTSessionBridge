@@ -56,6 +56,23 @@ describe("NativeHostRelay", () => {
     expect(relay.state).toEqual({ bridge: "closed", extension: "closed" });
   });
 
+  it("rejects extension application data until the bridge handshake is ready", () => {
+    const relay = new NativeHostRelay({ implementationVersion: "0.1.0-test" });
+    relay.receiveFromExtension(helloFrame("extension"));
+    const response = nativeMessagingFrameSchema.parse({
+      protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
+      requestId: "request-session",
+      sequence: 1,
+      type: "session/connected",
+      payload: { sessionId: "session-example" },
+    });
+
+    expect(() => relay.receiveFromExtension(response)).toThrow(
+      expect.objectContaining<Partial<NativeLinkError>>({ code: "destination_unavailable" }),
+    );
+    expect(relay.state).toEqual({ bridge: "closed", extension: "closed" });
+  });
+
   it("closes both links after any protocol violation", () => {
     const relay = readyRelay();
 
