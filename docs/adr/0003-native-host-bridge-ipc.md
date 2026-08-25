@@ -1,46 +1,96 @@
-# ADR 0003: Authenticate Native Host-to-Bridge IPC Before Runtime Wiring
+# ADR 0003: Authenticate Native Host-to-Bridge IPC with a Windows Named Pipe
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-25
 
 ## Context
 
-Chrome starts a Native Messaging host as a separate process and gives it a stdio channel owned by Chrome. The Codex app-server facade is already running in another process. Those processes therefore need a local rendezvous mechanism before a selected browser tab can serve a Web-backed turn.
+Chrome starts a Native Messaging host as a separate process and gives it a stdio channel owned by Chrome. The Codex app-server facade is already running in another process. Those processes need a local rendezvous mechanism before an explicitly selected browser tab can serve a Web-backed turn.
 
-The versioned `hello` frame proves protocol compatibility and peer intent; it does not authenticate a local process. A fixed loopback port, a discoverable token file, or reuse of the Responses bearer would let another local process cross trust boundaries or would persist a capability that is currently memory-only.
+The versioned `hello` frame proves protocol compatibility and peer intent; it does not authenticate a local process. A fixed loopback port, a discoverable bearer file, or reuse of the Responses bearer would either weaken the local trust boundary or persist a capability that is currently memory-only.
 
-Chrome's Native Messaging manifest already restricts which extension may start the host through an exact `allowed_origins` entry. The host must verify the caller origin again, but that check authenticates the Chrome-facing link only. It does not authenticate the bridge-facing link.
+Chrome's Native Messaging manifest restricts which extension may start the host through an exact `allowed_origins` entry. The host also validates the caller origin, but that authenticates only the Chrome-facing link. It does not authenticate the bridge-facing link.
 
-## Proposed requirements
+Node's named-pipe API does not expose the Windows primitives needed to set a logon-session DACL, reject remote clients, require first-instance ownership, or inspect the peer process token. The Windows transport therefore needs a small platform helper rather than a `node:net` listener.
 
-The production rendezvous design must satisfy all of the following before it is wired into the native-host executable or browser extension:
+## Decision
 
-1. Use an operating-system-local, user-scoped transport, such as a Windows named pipe or Unix domain socket with restrictive ownership.
-2. Establish single-owner semantics and reject a second bridge or host when identity is ambiguous.
-3. Bind a fresh challenge to the current bridge process and the user-approved extension connection. Prevent replay across reconnects.
-4. Keep rendezvous capabilities out of files, registry values, environment variables, command-line arguments, diagnostics, and browser messages.
-5. Keep the Responses bearer separate from Native Messaging and IPC authentication.
-6. Enforce the same schema, frame, sequence, queue, timeout, and direction limits on both protocol links.
-7. Drop application data when the destination link is unavailable; never queue a prompt while waiting for an unverified peer.
-8. Treat a `hello(peer = "bridge")` frame as negotiation only, not authentication.
+On Windows, the bridge and Native Messaging host communicate through a one-instance byte-mode named pipe owned by a .NET platform helper. The helper performs operating-system authentication before it relays any protocol bytes. The TypeScript processes continue to terminate framing, schemas, handshakes, sequence numbers, correlation, and application direction independently.
 
-The host terminates transport frames independently on each link and re-envelopes validated application frames with a link-local sequence. It never performs a byte-for-byte blind relay.
+The authenticated principal is the current Windows logon session. This is intentionally narrower than “any local user” and more accurate than claiming executable identity.
 
-## Phase 3a consequence
+### Pipe identity and ownership
 
-Phase 3a implements the bounded Native Messaging codec, exact extension-origin policy, link state machine, and direction-aware relay in isolation. It deliberately does not ship a native-host manifest, registration script, broker listener, or extension connection until this ADR is resolved with a tested platform implementation.
+The helper derives a deterministic, non-secret pipe name from a domain-separated hash of the protocol version and current logon SID. Neither the SID nor the resulting name is emitted in diagnostics. The name is discovery metadata, not an authentication capability.
 
-The app-server facade continues to return `session_not_connected`; there is no simulated Web response or provider fallback.
+The bridge helper creates the pipe with:
 
-## Rejected interim shortcuts
+- `PIPE_ACCESS_DUPLEX`, `FILE_FLAG_OVERLAPPED`, and `FILE_FLAG_FIRST_PIPE_INSTANCE`;
+- byte mode, blocking wait mode, `PIPE_REJECT_REMOTE_CLIENTS`, and one maximum instance;
+- a protected DACL containing only the current logon SID;
+- individual read, write, attribute, and synchronize rights rather than generic write access; and
+- a non-inheritable pipe handle.
 
-- A fixed unauthenticated TCP port.
-- A plaintext discovery file containing a port or bearer token.
+If the deterministic name is already owned, the bridge fails closed. It does not retry with a weaker transport or a random discoverable endpoint.
+
+The client opens the same pipe with individual rights, overlapped I/O, and identification-only security quality of service. It does not retry through TCP or another fallback transport.
+
+### Mutual operating-system verification
+
+Immediately after connection and before relaying bytes, each helper obtains the peer PID and Windows session ID from the pipe handle. It opens and retains a handle to that process, reads the peer token, and compares all of the following with its own token:
+
+- user SID;
+- logon SID marked with `SE_GROUP_LOGON_ID`; and
+- token session ID.
+
+The pipe-reported session ID must also match the verified token session ID. Any missing token field, failed native call, exited peer, or mismatch closes the channel. Retaining the peer process handle prevents a later PID reuse from changing the identity that was checked.
+
+### Fresh channel binding
+
+The Native Messaging host may connect to the bridge only after it has validated Chrome's exact extension origin and completed the extension-side `hello` handshake. It never places the extension origin, tab identity, or a challenge in the pipe name, process arguments, environment, files, registry, or browser messages.
+
+After the authenticated pipe connects, the bridge initiates a new bridge-link handshake with a cryptographically random request identifier. The host is the responder and must echo that identifier in `hello/acknowledged` before the deadline. Link-local sequence numbers begin at zero on every connection. A recorded acknowledgement from another connection therefore cannot complete the new handshake.
+
+This challenge establishes freshness and binds protocol traffic to the live pipe; it is not a shared secret and does not replace the Windows identity checks.
+
+### Helper and relay lifecycle
+
+The bridge and Native Messaging host each spawn the packaged helper as a direct child with dedicated stdio pipes. The helper's mode is not secret. Its standard output carries only bounded length-framed relay bytes; standard error carries only allowlisted lifecycle/error codes. Content, identities, pipe names, nonces, and local paths are never logged.
+
+The helper accepts one connection and one peer for its lifetime. It uses bounded buffers, serialized writes, cancellation-aware full-duplex copying, and a symmetric 1 MiB frame ceiling. EOF, peer exit, malformed framing, excess data, or either relay direction failing cancels the other direction and closes the pipe.
+
+The Native Messaging host terminates transport frames independently on its Chrome and bridge links and re-envelopes validated application frames with link-local sequence numbers. It never performs a byte-for-byte relay between Chrome and the bridge. Application data is rejected when either destination link is unavailable; prompts are never queued for a future peer.
+
+The Responses bearer remains confined to the official Codex child and local Responses endpoint. It is never used for pipe discovery or authentication.
+
+## Trust boundary and limitations
+
+This decision authenticates the Windows user and logon session, not the integrity of arbitrary user-writable JavaScript or the identity of an unsigned executable. Code already running as the same user in the same logon session can inspect the public pipe namespace, race the legitimate client, or imitate the protocol. Protecting against that attacker requires a separately installed and ACL-protected signed binary or a package identity backed by Windows, and is outside the initial local-user threat model.
+
+Administrator, `SYSTEM`, kernel, browser-compromise, and same-logon-session malware are also outside this boundary. Races from those principals must still fail safely: the bridge must not fall back, disclose credentials, or silently submit a turn. Installation hardening and code signing are required before a production release and will be reviewed separately.
+
+## Consequences
+
+- Windows becomes the first supported end-to-end platform and requires the packaged .NET helper.
+- The TypeScript runtime cannot replace the helper with `node:net` without a new security review.
+- A browser session is invalidated whenever the authenticated channel changes or disconnects. Active work terminates exactly once and is never replayed automatically.
+- The app-server Responses stub remains fail-closed until a separate adapter can preserve pinned session and catalog-revision identity without flattening unsupported Responses semantics.
+- Unix-domain transport remains future work and must provide an equivalent documented identity and ownership boundary.
+
+## Rejected alternatives
+
+- A fixed or ephemeral unauthenticated TCP port.
+- A plaintext discovery file containing a port, bearer, or challenge.
 - Passing a shared secret through process arguments or inherited environment variables.
 - Reusing the process-scoped Responses bearer outside the official Codex child boundary.
-- Trusting the protocol peer role or Windows parent-window handle as authentication.
+- Treating `hello(peer = "bridge")`, a parent PID, or a parent window handle as authentication.
+- Using a public nonce as an HMAC key or otherwise presenting an unkeyed transcript hash as identity proof.
+- Relying on the default named-pipe DACL or `PipeOptions.CurrentUserOnly` as the complete boundary.
 
 ## References
 
+- [Named Pipe Security and Access Rights](https://learn.microsoft.com/windows/win32/ipc/named-pipe-security-and-access-rights)
+- [CreateNamedPipe](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-createnamedpipew)
+- [GetNamedPipeClientProcessId](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid)
 - [Chrome Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
 - [Chrome extension security guidance](https://developer.chrome.com/docs/extensions/develop/security-privacy/stay-secure)
