@@ -19,7 +19,7 @@ export const catalogRevisionSchema = z.string().min(1).max(128).regex(opaqueIdPa
 export const sessionIdSchema = z.string().min(1).max(128).regex(opaqueIdPattern);
 export const turnIdSchema = z.string().min(1).max(128).regex(opaqueIdPattern);
 export const modelIdSchema = z.string().min(1).max(256).regex(modelIdPattern);
-export const frameSequenceSchema = z.number().int().nonnegative();
+export const frameSequenceSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 
 const implementationVersionSchema = z.string().min(1).max(64).regex(opaqueIdPattern);
 const displayNameSchema = z.string().min(1).max(128).refine(isSafeSingleLineText);
@@ -85,7 +85,26 @@ export const browserCapabilitiesSchema = z
     toolCalls: z.literal(false),
     models: z.array(webModelDescriptorSchema).max(128),
   })
-  .strict();
+  .strict()
+  .superRefine((capabilities, context) => {
+    const modelIds = capabilities.models.map((model) => model.id);
+
+    if (new Set(modelIds).size !== modelIds.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Browser model identifiers must be unique.",
+        path: ["models"],
+      });
+    }
+
+    if (!capabilities.modelDiscovery && capabilities.models.length > 0) {
+      context.addIssue({
+        code: "custom",
+        message: "Models cannot be reported when model discovery is unavailable.",
+        path: ["models"],
+      });
+    }
+  });
 
 const sessionPayloadSchema = z
   .object({
@@ -123,6 +142,17 @@ const frameBaseShape = {
   sequence: frameSequenceSchema,
 } as const;
 
+const supportedProtocolVersionsSchema = z
+  .array(z.number().int().positive().max(Number.MAX_SAFE_INTEGER))
+  .min(1)
+  .max(16)
+  .refine((versions) => new Set(versions).size === versions.length, {
+    message: "Supported protocol versions must be unique.",
+  })
+  .refine((versions) => versions.includes(NATIVE_MESSAGING_PROTOCOL_VERSION), {
+    message: "The current protocol version must be advertised.",
+  });
+
 export const helloFrameSchema = z
   .object({
     ...frameBaseShape,
@@ -131,7 +161,7 @@ export const helloFrameSchema = z
       .object({
         peer: peerRoleSchema,
         implementationVersion: implementationVersionSchema,
-        supportedProtocolVersions: z.array(z.number().int().positive()).min(1).max(16),
+        supportedProtocolVersions: supportedProtocolVersionsSchema,
       })
       .strict(),
   })

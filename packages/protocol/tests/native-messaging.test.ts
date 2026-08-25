@@ -160,11 +160,50 @@ describe("native-messaging frames", () => {
       false,
     );
     expect(nativeMessagingFrameSchema.safeParse({ ...valid, sequence: -1 }).success).toBe(false);
+    expect(
+      nativeMessagingFrameSchema.safeParse({ ...valid, sequence: Number.MAX_SAFE_INTEGER + 1 })
+        .success,
+    ).toBe(false);
     expect(nativeMessagingFrameSchema.safeParse({ ...valid, extra: true }).success).toBe(false);
     expect(
       nativeMessagingFrameSchema.safeParse({
         ...valid,
         payload: { sessionId: "session-example", tabId: 123 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a truthful, unique handshake version advertisement", () => {
+    const hello = {
+      ...baseFrame,
+      type: "hello",
+      payload: {
+        peer: "extension",
+        implementationVersion: "0.1.0-fixture",
+        supportedProtocolVersions: [NATIVE_MESSAGING_PROTOCOL_VERSION],
+      },
+    };
+
+    expect(nativeMessagingFrameSchema.safeParse(hello).success).toBe(true);
+    expect(
+      nativeMessagingFrameSchema.safeParse({
+        ...hello,
+        payload: { ...hello.payload, supportedProtocolVersions: [2] },
+      }).success,
+    ).toBe(false);
+    expect(
+      nativeMessagingFrameSchema.safeParse({
+        ...hello,
+        payload: { ...hello.payload, supportedProtocolVersions: [1, 1] },
+      }).success,
+    ).toBe(false);
+    expect(
+      nativeMessagingFrameSchema.safeParse({
+        ...hello,
+        payload: {
+          ...hello.payload,
+          supportedProtocolVersions: [Number.MAX_SAFE_INTEGER + 1],
+        },
       }).success,
     ).toBe(false);
   });
@@ -263,6 +302,47 @@ describe("native-messaging frames", () => {
         inputModalities: ["text"],
         supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Light reasoning" }],
         defaultReasoningEffort: "low",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects duplicate models and undiscoverable model catalogs", () => {
+    const model = {
+      id: "gptsessionbridge/web/example-model",
+      displayName: "Example Web Model",
+      inputModalities: ["text"] as const,
+      supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced reasoning" }],
+      defaultReasoningEffort: "medium",
+    };
+    const capabilities = {
+      catalogRevision: "catalog-example-a",
+      modelDiscovery: true,
+      streaming: true,
+      cancellation: true,
+      temporaryChat: true,
+      imageInput: false,
+      toolCalls: false,
+      models: [model],
+    };
+
+    expect(
+      nativeMessagingFrameSchema.safeParse({
+        ...baseFrame,
+        type: "capabilities/result",
+        payload: {
+          sessionId: "session-example",
+          capabilities: { ...capabilities, models: [model, model] },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      nativeMessagingFrameSchema.safeParse({
+        ...baseFrame,
+        type: "capabilities/result",
+        payload: {
+          sessionId: "session-example",
+          capabilities: { ...capabilities, modelDiscovery: false },
+        },
       }).success,
     ).toBe(false);
   });
