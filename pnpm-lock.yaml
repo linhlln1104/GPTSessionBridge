@@ -81,6 +81,9 @@ importers:
 
   apps/browser-extension:
     dependencies:
+      '@gpt-session-bridge/native-messaging':
+        specifier: workspace:*
+        version: link:../../packages/native-messaging
       '@gpt-session-bridge/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -94,6 +97,9 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 6.0.3
+      vite:
+        specifier: 8.2.2
+        version: 8.2.2(@types/node@24.13.3)
       vitest:
         specifier: 'catalog:'
         version: 4.1.11(@types/node@24.13.3)(@vitest/coverage-v8@4.1.11)(vite@8.2.2(@types/node@24.13.3))

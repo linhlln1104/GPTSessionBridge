@@ -1,0 +1,31 @@
+{
+  "name": "@gpt-session-bridge/browser-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Explicit-tab Manifest V3 connection boundary for GPTSessionBridge.",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && vite build --config vite.config.ts && node scripts/build-content.mjs && node scripts/copy-static.mjs && pnpm run verify:output",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify:output": "node scripts/verify-output.mjs"
+  },
+  "dependencies": {
+    "@gpt-session-bridge/native-messaging": "workspace:*",
+    "@gpt-session-bridge/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "typescript": "catalog:",
+    "vite": "8.2.2",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.0.0 <25"
+  }
+}

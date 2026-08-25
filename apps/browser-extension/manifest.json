@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "minimum_chrome_version": "106",
+  "name": "GPTSessionBridge",
+  "version": "0.1.0",
+  "description": "Connect an explicitly selected ChatGPT tab to a local GPTSessionBridge session.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2oUQsfjjM9WFuyYpDNKOT9GPF7bxIAPXu8wKJ9zsAPitCOSEsOsrDSultuRbpOjjadQetmhJl/fCC1OadvetgDvbBiVhSv45ttLEeM1jRhN4zyp5Hm0uuHkK3qHE0L/F315IKF70vWpO5LQCmoMwfgilztbnWbvmWViSd+GbUfWAGNv/4BdnXEimfebdAotI1W5p5aBy/0tQVG4fa/DgLAwfUYvNCimtG+0JrCjAsl/FuoVHM3t52qZlJEU1yJeXYF7Wo4sDhpWFOjXjT6v1QjWcpdDUyOBxS+9ENEjLDn0qhFOvVM8ntenhYsr/kPoI61EW13+5X2QoN+jRz0hEnwIDAQAB",
+  "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Connect this ChatGPT tab",
+    "default_popup": "popup/popup.html"
+  },
+  "incognito": "not_allowed",
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+  }
+}
