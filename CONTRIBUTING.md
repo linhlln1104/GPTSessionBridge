@@ -20,6 +20,7 @@ Do not disable strict peer-dependency or engine checks to make a local installat
 - Preserve unknown app-server messages unless the router explicitly owns the method.
 - Add tests for success, cancellation, malformed input, disconnection, and terminal-state behavior.
 - Never add silent model or provider fallback.
+- Keep Native Messaging `stdout` exclusively for framed protocol bytes; diagnostics belong on `stderr` and must use the safe schema.
 - Keep comments focused on public invariants. Put durable architectural rationale in an ADR.
 
 ## Sensitive-data rules

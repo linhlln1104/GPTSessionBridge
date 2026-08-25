@@ -4,7 +4,7 @@
 
 GPTSessionBridge lets a Codex client create a thread backed by a ChatGPT Web model without moving the user's ChatGPT login into the bridge. It integrates at the Codex app-server boundary and uses a browser extension to operate only a tab the user explicitly connected.
 
-Phase 2 implements the app-server facade, synthetic model catalog, thread routing, official Codex child lifecycle, and authenticated local Responses stub. Native Messaging and the browser extension are Phase 3 work. Consequently, a valid Web request currently terminates with `session_not_connected` rather than a simulated response.
+Phase 2 implements the app-server facade, synthetic model catalog, thread routing, official Codex child lifecycle, and authenticated local Responses stub. Phase 3a implements the isolated Native Messaging transport and relay state machine. Authenticated host-to-bridge IPC, the browser extension, and the Responses adapter remain future work. Consequently, a valid Web request currently terminates with `session_not_connected` rather than a simulated response.
 
 ## Components
 
@@ -29,9 +29,15 @@ The implemented Phase 2 stub presents the narrow authenticated endpoint required
 
 Phase 3 will replace the terminal stub behavior with a Responses adapter that propagates cancellation, emits a terminal event exactly once, and translates between Responses streaming events and the versioned browser protocol.
 
+Protocol v1 currently declares text input only and reports `toolCalls: false` and `imageInput: false`. A future adapter must reject unsupported Responses input explicitly; it must not discard tools, images, roles, or other semantics to force a browser turn through the narrower protocol.
+
 ### Native Messaging host
 
-Planned for Phase 3. The host will validate Chrome Native Messaging frames and relay only versioned, schema-checked messages. It will not expose browser cookies, storage, arbitrary JavaScript execution, or unrestricted DOM access to the bridge.
+Phase 3a implements the host's transport foundation. It decodes Chrome's 4-byte length-prefixed UTF-8 JSON messages, applies a symmetric 1 MiB frame ceiling, bounds buffered and queued data, serializes writes with backpressure, and validates every frame against the versioned schema.
+
+The host owns two independent protocol links: one to the extension and one to the bridge. It terminates handshakes, heartbeats, and acknowledgements locally; enforces exact peer, sequence, correlation, and direction rules; and re-envelopes application frames with a new link-local sequence. It never performs a blind byte relay.
+
+The foundation also validates one exact canonical Chrome extension origin. A runnable host, Chrome registration, and bridge-facing IPC are intentionally withheld until [ADR 0003](adr/0003-native-host-bridge-ipc.md) defines an authenticated rendezvous. The host will not expose browser cookies, storage, arbitrary JavaScript execution, or unrestricted DOM access to the bridge.
 
 ### Browser extension
 
@@ -46,12 +52,16 @@ apps/bridge --> packages/core
        |
        +-----> packages/protocol
 
-Phase 3:
+Phase 3a:
 
-apps/native-host ------+--> packages/core
-apps/extension --------+          |
-                                  +--> packages/protocol
-                                  +--> packages/responses
+apps/native-host ----------> packages/protocol
+
+Future Phase 3:
+
+apps/bridge ----------+----> packages/core
+apps/native-host -----+----> packages/protocol
+apps/extension -------+
+                      +----> packages/responses
 ```
 
 Applications own I/O and platform APIs. Packages contain portable contracts, state machines, and pure policy logic.

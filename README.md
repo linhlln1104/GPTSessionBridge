@@ -3,7 +3,7 @@
 GPTSessionBridge is a local bridge that lets a Codex client route an explicitly selected thread to a ChatGPT Web model while the user's ChatGPT session remains inside their existing browser.
 
 > [!WARNING]
-> This project is pre-alpha and not production-ready. The Phase 2 app-server facade and synthetic Web model route are runnable, but the browser extension is planned for Phase 3. A Web request currently fails with `session_not_connected` after the local provider boundary verifies it.
+> This project is pre-alpha and not production-ready. The Phase 2 app-server facade and the isolated Phase 3a Native Messaging transport foundation are implemented, but the browser session is not wired end to end. A Web request currently fails with `session_not_connected` after the local provider boundary verifies it.
 
 ## Design goals
 
@@ -28,9 +28,9 @@ GPTSessionBridge facade --------> official Codex app-server
 Native Messaging host <--------> browser extension <--------> selected chatgpt.com tab
 ```
 
-The Phase 2 facade launches the official Codex app-server, preserves the JSON meaning of unowned protocol messages, appends a synthetic Web model to paginated `model/list` results, and pins the local Web provider when that model is selected. Native Messaging and the browser extension are Phase 3 components.
+The Phase 2 facade launches the official Codex app-server, preserves the JSON meaning of unowned protocol messages, appends a synthetic Web model to paginated `model/list` results, and pins the local Web provider when that model is selected. Phase 3a adds the bounded Chrome Native Messaging codec and link-local relay policy without weakening the browser-session boundary.
 
-### Available in Phase 2
+### Available now
 
 - A runnable stdio app-server facade backed by the official Codex child process.
 - Semantic pass-through for unowned app-server messages.
@@ -38,12 +38,14 @@ The Phase 2 facade launches the official Codex app-server, preserves the JSON me
 - Thread-scoped Web provider, model, reasoning-effort, and catalog-revision pinning.
 - An authenticated, loopback-only Responses endpoint with bounded request handling.
 - Explicit rejection of provider switching, reserved provider/config overrides, Web review/realtime/steering flows, and unsupported resume identities.
+- A strict 4-byte Native Messaging codec with a symmetric 1 MiB frame limit, bounded buffering and writes, exact UTF-8/JSON/schema validation, and serialized backpressure handling.
+- Independent extension and bridge link state machines with peer, version, sequence, heartbeat, direction, and extension-origin checks.
 
 ### Not available yet
 
 - Connection to an existing `chatgpt.com` tab.
 - Real ChatGPT Web model discovery or response streaming.
-- Native Messaging host, browser extension, installer, or local tool loop.
+- Runnable Native Messaging host registration, authenticated host-to-bridge IPC, browser extension, installer, or local tool loop.
 
 The current Responses endpoint therefore returns HTTP 503 with `session_not_connected` for a valid Web request. The synthetic model exists to verify the facade and model-picker integration; it is not a usable ChatGPT model.
 
@@ -88,13 +90,13 @@ corepack pnpm build
 corepack pnpm smoke:app-server
 ```
 
-`smoke:app-server` builds the workspace, launches the facade against the installed Codex CLI, and verifies the app-server handshake plus synthetic model catalog contract. Automated integration tests verify the current `session_not_connected` provider response. Neither path contacts ChatGPT Web.
+`smoke:app-server` builds the workspace, launches the facade against the installed Codex CLI, and verifies the app-server handshake plus synthetic model catalog contract. Automated integration tests verify the current `session_not_connected` provider response and the isolated Native Messaging transport. Neither path contacts ChatGPT Web.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
 
 ## Project status
 
-Phase 2 establishes a runnable app-server facade, model-catalog augmentation, fail-closed thread routing, an authenticated local provider boundary, versioned protocols, and repository quality gates. Browser automation and real-account fixtures are deliberately excluded until Phase 3.
+Phase 2 establishes a runnable app-server facade, model-catalog augmentation, fail-closed thread routing, an authenticated local provider boundary, and versioned protocols. Phase 3a adds a tested Native Messaging transport and direction-aware relay foundation. Authenticated host-to-bridge rendezvous, browser automation, and real-account fixtures remain deliberately excluded.
 
 The current compatibility snapshot was tested on 2026-08-25 with Codex CLI `0.149.0-alpha.4.3`, Node.js `24.18.1`, and Windows x64. See [Compatibility](docs/compatibility.md) for the exact scope and limitations.
 
