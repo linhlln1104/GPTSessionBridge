@@ -16,6 +16,14 @@
     "./security": {
       "types": "./dist/security/index.d.ts",
       "import": "./dist/security/index.js"
+    },
+    "./catalog": {
+      "types": "./dist/catalog/index.d.ts",
+      "import": "./dist/catalog/index.js"
+    },
+    "./routing": {
+      "types": "./dist/routing/index.d.ts",
+      "import": "./dist/routing/index.js"
     }
   },
   "files": [

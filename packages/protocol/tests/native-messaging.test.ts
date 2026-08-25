@@ -64,7 +64,7 @@ describe("native-messaging frames", () => {
           toolCalls: false,
           models: [
             {
-              id: "web/example-model",
+              id: "gptsessionbridge/web/example-model",
               displayName: "Example Web Model",
               inputModalities: ["text"],
               supportedReasoningEfforts: [
@@ -91,7 +91,7 @@ describe("native-messaging frames", () => {
           sessionId: "session-example",
           turnId: "turn-example",
           catalogRevision: "catalog-example-a",
-          modelId: "web/example-model",
+          modelId: "gptsessionbridge/web/example-model",
           reasoningEffort: "medium",
           input: [{ type: "text", text: "Return a synthetic greeting." }],
           temporary: true,
@@ -177,7 +177,7 @@ describe("native-messaging frames", () => {
         sessionId: "session-example",
         turnId: "turn-example",
         catalogRevision: "catalog-example-a",
-        modelId: "web/example-model",
+        modelId: "gptsessionbridge/web/example-model",
         reasoningEffort: "medium",
         input: [{ type: "text", text: "x".repeat(MAX_TURN_INPUT_TEXT_CHARACTERS + 1) }],
         temporary: true,
@@ -229,7 +229,7 @@ describe("native-messaging frames", () => {
           toolCalls: false,
           models: [
             {
-              id: "web/example-model",
+              id: "gptsessionbridge/web/example-model",
               displayName: "Example Web Model",
               inputModalities: ["text"],
               supportedReasoningEfforts: [
@@ -246,7 +246,7 @@ describe("native-messaging frames", () => {
     expect(nativeMessagingFrameSchema.safeParse(frame).success).toBe(false);
     expect(
       webModelDescriptorSchema.safeParse({
-        id: "web/example-model",
+        id: "gptsessionbridge/web/example-model",
         displayName: "Example Web Model",
         inputModalities: ["text"],
         supportedReasoningEfforts: [
@@ -258,7 +258,7 @@ describe("native-messaging frames", () => {
     ).toBe(false);
     expect(
       webModelDescriptorSchema.safeParse({
-        id: "web/example-model",
+        id: "gptsessionbridge/web/example-model",
         displayName: "Spoofed \u202E model",
         inputModalities: ["text"],
         supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Light reasoning" }],
