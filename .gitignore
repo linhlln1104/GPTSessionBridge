@@ -1,0 +1,41 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local tools and editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# Logs, diagnostics, and crash data
+*.log
+logs/
+diagnostics/
+crash-dumps/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
+*.cookies
+*.har
+
+# Browser and runtime state
+chrome-profile/
+user-data-dir/
+sessions/
+tmp/
+temp/
