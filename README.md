@@ -3,7 +3,7 @@
 GPTSessionBridge is a local bridge that lets a Codex client route an explicitly selected thread to a ChatGPT Web model while the user's ChatGPT session remains inside their existing browser.
 
 > [!WARNING]
-> This project is pre-alpha. The browser bridge, model routing, installer, and tool loop are not implemented yet. Do not use it with sensitive work.
+> This project is pre-alpha and not production-ready. The Phase 2 app-server facade and synthetic Web model route are runnable, but the browser extension is planned for Phase 3. A Web request currently fails with `session_not_connected` after the local provider boundary verifies it.
 
 ## Design goals
 
@@ -14,7 +14,7 @@ GPTSessionBridge is a local bridge that lets a Codex client route an explicitly 
 - Fail closed when a browser session, model, or protocol capability is unavailable.
 - Keep diagnostics content-free and telemetry disabled by default.
 
-## Planned architecture
+## Architecture
 
 ```text
 Codex IDE extension
@@ -28,7 +28,26 @@ GPTSessionBridge facade --------> official Codex app-server
 Native Messaging host <--------> browser extension <--------> selected chatgpt.com tab
 ```
 
-The facade will pass unknown app-server messages through unchanged, add connected Web models to `model/list`, and pin a model provider when a thread is created. Switching between the Codex and Web providers will require a new thread; the bridge will not silently fall back to another provider.
+The Phase 2 facade launches the official Codex app-server, preserves the JSON meaning of unowned protocol messages, appends a synthetic Web model to paginated `model/list` results, and pins the local Web provider when that model is selected. Native Messaging and the browser extension are Phase 3 components.
+
+### Available in Phase 2
+
+- A runnable stdio app-server facade backed by the official Codex child process.
+- Semantic pass-through for unowned app-server messages.
+- Paginated native model discovery with a synthetic `gptsessionbridge/web/example-model` entry.
+- Thread-scoped Web provider, model, reasoning-effort, and catalog-revision pinning.
+- An authenticated, loopback-only Responses endpoint with bounded request handling.
+- Explicit rejection of provider switching, reserved provider/config overrides, Web review/realtime/steering flows, and unsupported resume identities.
+
+### Not available yet
+
+- Connection to an existing `chatgpt.com` tab.
+- Real ChatGPT Web model discovery or response streaming.
+- Native Messaging host, browser extension, installer, or local tool loop.
+
+The current Responses endpoint therefore returns HTTP 503 with `session_not_connected` for a valid Web request. The synthetic model exists to verify the facade and model-picker integration; it is not a usable ChatGPT model.
+
+Switching between Codex and Web providers requires a new thread. The bridge never silently falls back to another provider or model.
 
 See [Architecture](docs/architecture.md), [Security model](docs/security-model.md), and [Privacy](docs/privacy.md) for the current contracts.
 
@@ -54,7 +73,7 @@ Requirements:
 - Git
 
 ```shell
-corepack pnpm install
+corepack pnpm install --frozen-lockfile
 corepack pnpm verify
 ```
 
@@ -66,13 +85,18 @@ corepack pnpm lint
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
+corepack pnpm smoke:app-server
 ```
+
+`smoke:app-server` builds the workspace, launches the facade against the installed Codex CLI, and verifies the app-server handshake plus synthetic model catalog contract. Automated integration tests verify the current `session_not_connected` provider response. Neither path contacts ChatGPT Web.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
 
 ## Project status
 
-The current milestone establishes versioned protocols, security primitives, and repository quality gates. Browser automation and real-account fixtures are deliberately excluded from automated tests.
+Phase 2 establishes a runnable app-server facade, model-catalog augmentation, fail-closed thread routing, an authenticated local provider boundary, versioned protocols, and repository quality gates. Browser automation and real-account fixtures are deliberately excluded until Phase 3.
+
+The current compatibility snapshot was tested on 2026-08-25 with Codex CLI `0.149.0-alpha.4.3`, Node.js `24.18.1`, and Windows x64. See [Compatibility](docs/compatibility.md) for the exact scope and limitations.
 
 GPTSessionBridge is an independent project. It is not affiliated with or endorsed by OpenAI. ChatGPT and Codex are trademarks of their respective owner.
 

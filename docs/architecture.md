@@ -4,40 +4,54 @@
 
 GPTSessionBridge lets a Codex client create a thread backed by a ChatGPT Web model without moving the user's ChatGPT login into the bridge. It integrates at the Codex app-server boundary and uses a browser extension to operate only a tab the user explicitly connected.
 
+Phase 2 implements the app-server facade, synthetic model catalog, thread routing, official Codex child lifecycle, and authenticated local Responses stub. Native Messaging and the browser extension are Phase 3 work. Consequently, a valid Web request currently terminates with `session_not_connected` rather than a simulated response.
+
 ## Components
 
 ### App-server facade
 
-The facade is a bidirectional protocol proxy. It launches the official Codex app-server as a child process, correlates interleaved requests by identifier and direction, and forwards messages it does not own without changing their meaning.
+The implemented facade is a bidirectional protocol proxy. It launches the official Codex app-server as a child process, correlates interleaved requests by identifier and direction, and forwards messages it does not own without changing their meaning.
 
 The facade owns two operations:
 
-1. Merge available Web models into paginated `model/list` results.
-2. Pin the configured provider for Web-backed `thread/start`, `thread/resume`, and `thread/fork` requests.
+1. Merge the current synthetic Web model into paginated `model/list` results.
+2. Pin the configured provider for verified Web-backed `thread/start`, `thread/resume`, and `thread/fork` requests.
 
-Each browser capability snapshot has an opaque revision and lists the public reasoning efforts supported by each model. A Web turn pins the model, reasoning effort, and catalog revision together so a stale picker selection cannot be executed against a changed browser catalog.
+Phase 2 uses a fixed synthetic catalog revision. In Phase 3, each browser capability snapshot will have an opaque revision and list the public reasoning efforts supported by each model. A Web turn pins the model, reasoning effort, and catalog revision together so a stale picker selection cannot be executed against a changed browser catalog.
 
 Native Codex threads pass through without custom-provider routing. The bridge does not proxy native Codex API traffic.
 
-### Local Responses adapter
+For a Web-backed thread, the facade removes request-local definitions of its reserved provider and injects the complete provider configuration itself. A fresh bearer capability and ephemeral loopback base URL are passed directly through the in-memory app-server request to the trusted official Codex child. They are not placed in the child environment, command-line arguments, logs, or persistent configuration.
 
-The adapter presents the narrow Responses-compatible surface required by the Codex child for a Web-backed thread. It validates input, propagates cancellation, emits a terminal event exactly once, and translates between Responses streaming events and the versioned browser protocol.
+### Local Responses provider boundary
+
+The implemented Phase 2 stub presents the narrow authenticated endpoint required by the Codex child for a Web-backed thread. It binds only to an ephemeral IPv4 loopback port, validates the process capability, bounds request resources, accepts only `POST /v1/responses`, validates a JSON object body, and returns `session_not_connected`.
+
+Phase 3 will replace the terminal stub behavior with a Responses adapter that propagates cancellation, emits a terminal event exactly once, and translates between Responses streaming events and the versioned browser protocol.
 
 ### Native Messaging host
 
-The host validates Chrome Native Messaging frames and relays only versioned, schema-checked messages. It does not expose browser cookies, storage, arbitrary JavaScript execution, or unrestricted DOM access to the bridge.
+Planned for Phase 3. The host will validate Chrome Native Messaging frames and relay only versioned, schema-checked messages. It will not expose browser cookies, storage, arbitrary JavaScript execution, or unrestricted DOM access to the bridge.
 
 ### Browser extension
 
-The Manifest V3 extension connects a `chatgpt.com` tab only after an explicit user action. Its content adapter discovers public model labels, starts a turn, streams visible output, and reports session loss. DOM-specific behavior remains isolated from routing and protocol code.
+Planned for Phase 3. The Manifest V3 extension will connect a `chatgpt.com` tab only after an explicit user action. Its content adapter will discover public model labels, start a turn, stream visible output, and report session loss. DOM-specific behavior will remain isolated from routing and protocol code.
 
 ## Dependency direction
 
 ```text
-apps/bridge -----------+
-apps/native-host ------+--> packages/core --> packages/protocol
-apps/extension --------+           |
-                                   +--> packages/responses
+Phase 2:
+
+apps/bridge --> packages/core
+       |
+       +-----> packages/protocol
+
+Phase 3:
+
+apps/native-host ------+--> packages/core
+apps/extension --------+          |
+                                  +--> packages/protocol
+                                  +--> packages/responses
 ```
 
 Applications own I/O and platform APIs. Packages contain portable contracts, state machines, and pure policy logic.
@@ -46,7 +60,11 @@ Applications own I/O and platform APIs. Packages contain portable contracts, sta
 
 Provider selection is pinned at a thread boundary. Web-to-Web model changes may be supported when the active Web adapter reports the capability. Switching between a native Codex provider and the Web provider requires a new thread or an explicit future handoff flow.
 
-Unknown virtual model identifiers, stale model catalogs, disconnected tabs, and unsupported capabilities return explicit errors. They never trigger a provider or model fallback.
+Unknown virtual model identifiers, stale model catalogs, disconnected sessions, and unsupported capabilities return explicit errors. They never trigger a provider or model fallback.
+
+Request-local definitions, config writes, and command-line overrides for the reserved Web provider or model namespace are rejected. Reviews, realtime sessions, steering, and unverified derived threads are rejected for Web routes. Web resumes that include inline history, plus Web resume or fork requests carrying any rollout path, are also rejected until the facade can establish a safe, unambiguous route identity for those forms.
+
+During resume/fork, the source thread is quarantined: pipelined thread operations are rejected and server-initiated requests do not cross to the client until the lifecycle response settles. Resume responses must return the requested thread identifier; fork responses must return a fresh identifier with `thread.forkedFromId` bound to the requested source. Client notifications are subject to the same routing guards, while request-only lifecycle notifications are dropped because no response exists to validate their identity. A thread identifier returned with an invalid lifecycle result is retained as a bounded tombstone, and the proxy terminates so the official child cannot continue in an untrusted routing state.
 
 ## Lifecycle
 
@@ -60,4 +78,4 @@ Writes are serialized per destination and respect backpressure. Malformed or ove
 
 ## Persistence
 
-The initial implementation keeps routing and conversation correlation in bounded memory. Persistent Web conversation state is out of scope until an encrypted, opt-in design is reviewed separately.
+The initial implementation keeps bridge-owned routing and conversation correlation in bounded memory. It cannot resume a Web route after the facade restarts. The official Codex child still owns its normal thread storage and may persist a rollout according to the request and Codex configuration. Additional persistent Web conversation state is out of scope until an encrypted, opt-in design is reviewed separately.

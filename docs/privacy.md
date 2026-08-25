@@ -18,7 +18,7 @@ The bridge must not collect or persist:
 
 ## Storage and telemetry
 
-Conversation persistence and telemetry are disabled by default. Routing state is bounded and memory-only in the initial implementation. Logs use a fixed content-free schema and remain local.
+The bridge does not add persistent storage for Web route metadata or conversation content, and its routing state is bounded and memory-only. The official Codex child owns its normal thread storage and may persist a rollout according to the request and Codex configuration. Bridge telemetry is disabled by default; logs use a fixed content-free schema and remain local.
 
 ## User control
 
