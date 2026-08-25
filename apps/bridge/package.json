@@ -1,0 +1,32 @@
+{
+  "name": "@gpt-session-bridge/bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Codex app-server facade for GPTSessionBridge.",
+  "type": "module",
+  "bin": {
+    "gpt-session-bridge": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@gpt-session-bridge/core": "workspace:*",
+    "@gpt-session-bridge/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.0.0 <25"
+  }
+}

@@ -1,0 +1,4 @@
+export const BRIDGE_ACTIVE_ENV = "GPTSESSIONBRIDGE_ACTIVE" as const;
+export const CODEX_EXECUTABLE_ENV = "GPTSESSIONBRIDGE_CODEX_EXECUTABLE" as const;
+
+export const BRIDGE_ACTIVE_VALUE = "1" as const;

@@ -10,14 +10,16 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "build": "corepack pnpm --recursive --if-present build",
+    "build": "pnpm --recursive --if-present build",
+    "build:workspace-deps": "pnpm --filter @gpt-session-bridge/protocol --filter @gpt-session-bridge/core --if-present build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint . --max-warnings=0",
-    "test": "corepack pnpm --recursive --if-present test",
-    "test:coverage": "corepack pnpm --recursive --if-present test:coverage",
-    "typecheck": "tsc --noEmit -p tsconfig.json && corepack pnpm --recursive --if-present typecheck",
-    "verify": "corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test:coverage && corepack pnpm build"
+    "lint": "pnpm build:workspace-deps && eslint . --max-warnings=0",
+    "smoke:app-server": "pnpm build && node scripts/smoke-app-server.mjs",
+    "test": "pnpm build:workspace-deps && pnpm --recursive --if-present test",
+    "test:coverage": "pnpm build:workspace-deps && pnpm --recursive --if-present test:coverage",
+    "typecheck": "pnpm build:workspace-deps && tsc --noEmit -p tsconfig.json && pnpm --recursive --if-present typecheck",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm build"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
