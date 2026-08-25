@@ -63,6 +63,18 @@ describe("app-server envelopes", () => {
     expect(appServerEnvelopeSchema.safeParse({ id: 1, result: {}, error: {} }).success).toBe(false);
   });
 
+  it("rejects fractional and unsafe numeric message identifiers", () => {
+    expect(appServerEnvelopeSchema.safeParse({ id: 1.5, method: "thread/example" }).success).toBe(
+      false,
+    );
+    expect(
+      appServerEnvelopeSchema.safeParse({
+        id: Number.MAX_SAFE_INTEGER + 1,
+        method: "thread/example",
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects values that cannot cross a JSON transport", () => {
     expect(
       appServerEnvelopeSchema.safeParse({

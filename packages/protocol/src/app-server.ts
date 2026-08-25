@@ -6,7 +6,13 @@ import { jsonValueSchema } from "./json.js";
  * Codex app-server uses JSON-RPC 2.0 message shapes while omitting the
  * `jsonrpc` member on the wire. IDs can originate from either peer.
  */
-export const appServerMessageIdSchema = z.union([z.string(), z.number()]);
+export const appServerMessageIdSchema = z.union([
+  z.string(),
+  z
+    .number()
+    .int()
+    .refine((value) => Number.isSafeInteger(value)),
+]);
 
 export type AppServerMessageId = z.infer<typeof appServerMessageIdSchema>;
 
@@ -59,7 +65,7 @@ export const appServerErrorResponseSchema = z
   .catchall(jsonValueSchema);
 
 /**
- * Minimal lossless envelope used by the facade. Method-specific payloads stay
+ * Minimal semantic envelope used by the facade. Method-specific payloads stay
  * opaque so newer app-server fields can pass through without a bridge update.
  */
 export const appServerEnvelopeSchema = z.union([
