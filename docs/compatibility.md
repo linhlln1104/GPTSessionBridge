@@ -20,11 +20,12 @@ No production compatibility is declared during pre-alpha development.
 
 The following development snapshot was tested on 2026-08-25:
 
-| Component        | Tested value        | Scope                                          |
-| ---------------- | ------------------- | ---------------------------------------------- |
-| Operating system | Windows x64         | Local stdio facade and loopback Responses stub |
-| Codex CLI        | `0.149.0-alpha.4.3` | Official `codex app-server` child              |
-| Node.js          | `24.18.1`           | Workspace build, tests, facade, and smoke test |
+| Component        | Tested value        | Scope                                                           |
+| ---------------- | ------------------- | --------------------------------------------------------------- |
+| Operating system | Windows x64         | Facade, loopback Responses stub, and authenticated pipe helper  |
+| Codex CLI        | `0.149.0-alpha.4.3` | Official `codex app-server` child                               |
+| Node.js          | `24.18.1`           | Workspace build, tests, facade, and smoke test                  |
+| .NET SDK         | `10.0.301`          | Helper build, tests, formatting, audit, and single-file publish |
 
 Verified behavior in this snapshot:
 
@@ -32,9 +33,11 @@ Verified behavior in this snapshot:
 - Native `model/list` pagination completes before the synthetic `gptsessionbridge/web/example-model` entry is appended.
 - Selecting the synthetic model pins the reserved local provider without allowing model or provider fallback.
 - Automated integration tests verify that a valid request reaches the authenticated loopback Responses endpoint and returns `session_not_connected`, which is the expected Phase 2 result. The installed-Codex smoke test covers the app-server handshake and model catalog only.
-- Synthetic, in-memory tests verify the Phase 3a Native Messaging framing, strict origin policy, per-link handshake and sequence rules, direction-aware relay, bounded queues, and write backpressure.
+- Windows integration tests verify one-instance pipe ownership, a logon-session DACL, remote-client rejection, mutual peer identity checks, bounded accept lifetime, and full-duplex framed relay.
+- Synthetic tests verify the Native Messaging framing, strict origin policy, per-link handshake and sequence rules, direction-aware relay, coordinator correlation/lifecycle, bounded queues, and write backpressure.
+- MV3 tests and build gates verify exact active-document selection, disconnect race handling, a strict browser-safe protocol parser, and the absence of dynamic-code constructs in the extension output.
 
-This matrix does not claim IDE-extension, macOS, Linux, Chrome runtime, real-account, or ChatGPT Web compatibility. The Native Messaging tests do not register or launch a Chrome host. The synthetic model is a development fixture, not a supported model route.
+This matrix does not claim IDE-extension, macOS, Linux, installed Chrome Native Messaging, real-account, or ChatGPT Web compatibility. Tests do not register or launch a Chrome host. The synthetic model is a development fixture, not a supported model route.
 
 ## Current restrictions
 
@@ -46,8 +49,10 @@ This matrix does not claim IDE-extension, macOS, Linux, Chrome runtime, real-acc
 - Web route metadata is process-local; resuming a Web thread after restarting the facade is not supported in Phase 2.
 - Resume/fork sources remain quarantined until Codex returns a matching lifecycle identity. A mismatch terminates the facade session and requires the client to reconnect.
 - Client notifications pass through the same thread and configuration guards as requests. Request-only lifecycle, initialization, and catalog operations are dropped when sent without an identifier.
-- The local provider has no browser session until Phase 3 and therefore returns `session_not_connected`.
-- Phase 3a has no native-host executable, Chrome manifest, authenticated bridge rendezvous, or browser extension. Its transport and relay are isolated foundations only.
+- The local provider is not connected to `BrowserSessionCoordinator` and therefore returns `session_not_connected` even if the authenticated IPC listener is running.
+- Only one facade can own the deterministic browser IPC listener in a Windows logon session. Additional facades continue to support native Codex, but their Web route remains unavailable; no provider fallback occurs.
+- The Native Host exists as a tested source runtime but is not packaged as a Chrome-launchable executable or registered/installed. The extension manifest is a development build and is not distributed through the Chrome Web Store.
+- The extension connection shell has no ChatGPT DOM adapter. It advertises an unavailable catalog and rejects every turn without touching credentials or undocumented backend endpoints.
 - Native protocol v1 supports text input only and advertises no image or tool-call capability. A future Responses adapter must reject richer input rather than strip or reinterpret it.
 
 ## Browser UI changes

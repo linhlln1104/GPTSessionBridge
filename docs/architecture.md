@@ -4,7 +4,7 @@
 
 GPTSessionBridge lets a Codex client create a thread backed by a ChatGPT Web model without moving the user's ChatGPT login into the bridge. It integrates at the Codex app-server boundary and uses a browser extension to operate only a tab the user explicitly connected.
 
-Phase 2 implements the app-server facade, synthetic model catalog, thread routing, official Codex child lifecycle, and authenticated local Responses stub. Phase 3a implements the isolated Native Messaging transport and relay state machine. Authenticated host-to-bridge IPC, the browser extension, and the Responses adapter remain future work. Consequently, a valid Web request currently terminates with `session_not_connected` rather than a simulated response.
+Phase 2 implements the app-server facade, synthetic model catalog, thread routing, official Codex child lifecycle, and authenticated local Responses stub. Phase 3a implements the Native Messaging transport and relay state machine. The current Phase 3b increment adds authenticated Windows host-to-bridge IPC, `BrowserSessionCoordinator`, the Native Host runtime, and an explicit-tab Manifest V3 connection shell. Native-host packaging, the ChatGPT page adapter, and the Responses adapter remain future work. Consequently, a valid Web request currently terminates with `session_not_connected` rather than a simulated response.
 
 ## Components
 
@@ -17,7 +17,7 @@ The facade owns two operations:
 1. Merge the current synthetic Web model into paginated `model/list` results.
 2. Pin the configured provider for verified Web-backed `thread/start`, `thread/resume`, and `thread/fork` requests.
 
-Phase 2 uses a fixed synthetic catalog revision. In Phase 3, each browser capability snapshot will have an opaque revision and list the public reasoning efforts supported by each model. A Web turn pins the model, reasoning effort, and catalog revision together so a stale picker selection cannot be executed against a changed browser catalog.
+Phase 2 uses a fixed synthetic catalog revision. `BrowserSessionCoordinator` already requires every browser capability snapshot to have an opaque revision and validates the selected model, reasoning effort, temporary-chat support, and revision before a turn starts. The page adapter currently reports an unavailable catalog, and the synthetic facade catalog is not yet replaced by coordinator state. A future Responses adapter must propagate the same pinned revision so a stale picker selection cannot execute against changed browser capabilities.
 
 Native Codex threads pass through without custom-provider routing. The bridge does not proxy native Codex API traffic.
 
@@ -27,21 +27,31 @@ For a Web-backed thread, the facade removes request-local definitions of its res
 
 The implemented Phase 2 stub presents the narrow authenticated endpoint required by the Codex child for a Web-backed thread. It binds only to an ephemeral IPv4 loopback port, validates the process capability, bounds request resources, accepts only `POST /v1/responses`, validates a JSON object body, and returns `session_not_connected`.
 
-Phase 3 will replace the terminal stub behavior with a Responses adapter that propagates cancellation, emits a terminal event exactly once, and translates between Responses streaming events and the versioned browser protocol.
+A later Phase 3 increment will replace the terminal stub behavior with a Responses adapter that propagates cancellation, emits a terminal event exactly once, and translates between Responses streaming events and the versioned browser protocol. It must receive the route's pinned `catalogRevision`; substituting the coordinator's latest revision would permit a stale selection and is therefore rejected by design.
 
 Protocol v1 currently declares text input only and reports `toolCalls: false` and `imageInput: false`. A future adapter must reject unsupported Responses input explicitly; it must not discard tools, images, roles, or other semantics to force a browser turn through the narrower protocol.
 
 ### Native Messaging host
 
-Phase 3a implements the host's transport foundation. It decodes Chrome's 4-byte length-prefixed UTF-8 JSON messages, applies a symmetric 1 MiB frame ceiling, bounds buffered and queued data, serializes writes with backpressure, and validates every frame against the versioned schema.
+The Native Host runtime decodes Chrome's 4-byte length-prefixed UTF-8 JSON messages, applies a symmetric 1 MiB frame ceiling, bounds buffered and queued data, serializes writes with backpressure, and validates every frame against the versioned schema.
 
 The host owns two independent protocol links: one to the extension and one to the bridge. It terminates handshakes, heartbeats, and acknowledgements locally; enforces exact peer, sequence, correlation, and direction rules; and re-envelopes application frames with a new link-local sequence. It never performs a blind byte relay.
 
-The foundation also validates one exact canonical Chrome extension origin. A runnable host, Chrome registration, and bridge-facing IPC are intentionally withheld until [ADR 0003](adr/0003-native-host-bridge-ipc.md) defines an authenticated rendezvous. The host will not expose browser cookies, storage, arbitrary JavaScript execution, or unrestricted DOM access to the bridge.
+The runtime validates one exact canonical Chrome extension origin before reading extension traffic. Only after the extension-side handshake is ready does it start the Windows IPC client. The bridge owns the deterministic pipe listener through a self-contained .NET helper implementing [ADR 0003](adr/0003-native-host-bridge-ipc.md); both helper processes mutually verify the peer's Windows user SID, logon SID, and session before relaying framed bytes. The bridge then initiates a fresh link handshake and attaches the authenticated application port to `BrowserSessionCoordinator`.
+
+The source runtime is not yet packaged as a Chrome-launchable executable, registered in the Windows Native Messaging registry, installed, or signed. Those distribution steps remain a release gate rather than being simulated by a development script.
+
+The deterministic pipe permits one Web-enabled facade per Windows logon session. Listener acquisition is an optional browser capability, not a prerequisite for the official Codex child: a missing helper, unsupported architecture, or already-owned pipe disables Web transport for that facade while native Codex traffic continues unchanged. Web requests still terminate at the bridge boundary and are never rerouted to native usage.
+
+### Browser session coordinator
+
+`BrowserSessionCoordinator` owns at most one authenticated browser transport and one active turn. It correlates session, capability, turn, and cancellation messages; freezes capability snapshots; rejects stale catalog revisions and unsupported options; serializes delta delivery through an asynchronous sink; bounds pending operations and timeouts; and settles every turn exactly once. It never replays a prompt after transport loss. A valid browser session disconnect causes the broker to discard the pipe and establish a fresh authenticated channel.
 
 ### Browser extension
 
-Planned for Phase 3. The Manifest V3 extension will connect a `chatgpt.com` tab only after an explicit user action. Its content adapter will discover public model labels, start a turn, stream visible output, and report session loss. DOM-specific behavior will remain isolated from routing and protocol code.
+The Manifest V3 shell connects only after the user presses Connect. The service worker queries the active tab itself, accepts only an exact `https://chatgpt.com` document, injects one isolated main-frame content probe under `activeTab`, binds the port to the returned `documentId`, and then opens the exact Native Messaging host. Disconnect invalidates the in-flight connection generation so a delayed tab query or injection cannot restore consent implicitly.
+
+The extension has no persistent host access and no cookie, debugger, history, storage, or broad content-script permission. Its browser bundle uses a strict protocol parser and the build rejects dynamic-code constructs forbidden by the MV3 content security policy. The current content adapter deliberately reports `modelDiscovery: false` with an empty catalog and rejects turns. DOM-specific discovery and visible-page interaction remain isolated future work.
 
 ## Dependency direction
 
@@ -52,16 +62,16 @@ apps/bridge --> packages/core
        |
        +-----> packages/protocol
 
-Phase 3a:
+Phase 3:
 
-apps/native-host ----------> packages/protocol
+apps/bridge -----------+----> packages/core
+apps/native-host ------+----> packages/protocol
+apps/browser-extension-+
+                       +----> packages/native-messaging
 
-Future Phase 3:
+Future Responses integration:
 
-apps/bridge ----------+----> packages/core
-apps/native-host -----+----> packages/protocol
-apps/extension -------+
-                      +----> packages/responses
+apps/bridge ----------------> packages/responses
 ```
 
 Applications own I/O and platform APIs. Packages contain portable contracts, state machines, and pure policy logic.

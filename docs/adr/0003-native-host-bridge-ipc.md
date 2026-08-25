@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-25
+- Implementation: Windows x64 source runtime and helper complete; packaging and signing remain separate release gates
 
 ## Context
 
@@ -47,7 +48,7 @@ The pipe-reported session ID must also match the verified token session ID. Any 
 
 ### Fresh channel binding
 
-The Native Messaging host may connect to the bridge only after it has validated Chrome's exact extension origin and completed the extension-side `hello` handshake. It never places the extension origin, tab identity, or a challenge in the pipe name, process arguments, environment, files, registry, or browser messages.
+The Native Messaging host may connect to the bridge only after it has validated Chrome's exact extension origin and completed the extension-side `hello` handshake. Chrome necessarily supplies the caller origin to the Native Messaging host as its first process argument. The host never forwards that origin, tab identity, or a challenge through the helper arguments, helper environment, pipe name, files, registry, or bridge protocol messages.
 
 After the authenticated pipe connects, the bridge initiates a new bridge-link handshake with a cryptographically random request identifier. The host is the responder and must echo that identifier in `hello/acknowledged` before the deadline. Link-local sequence numbers begin at zero on every connection. A recorded acknowledgement from another connection therefore cannot complete the new handshake.
 
@@ -55,7 +56,7 @@ This challenge establishes freshness and binds protocol traffic to the live pipe
 
 ### Helper and relay lifecycle
 
-The bridge and Native Messaging host each spawn the packaged helper as a direct child with dedicated stdio pipes. The helper's mode is not secret. Its standard output carries only bounded length-framed relay bytes; standard error carries only allowlisted lifecycle/error codes. Content, identities, pipe names, nonces, and local paths are never logged.
+The bridge and Native Messaging host each spawn the packaged self-contained helper as a direct child with a fixed role argument, an empty inherited environment, and dedicated stdio pipes. The helper's mode is not secret. Its standard output carries only bounded length-framed relay bytes; standard error carries only allowlisted lifecycle/error codes. Content, identities, pipe names, nonces, and local paths are never logged.
 
 The helper accepts one connection and one peer for its lifetime. It uses bounded buffers, serialized writes, cancellation-aware full-duplex copying, and a symmetric 1 MiB frame ceiling. EOF, peer exit, malformed framing, excess data, or either relay direction failing cancels the other direction and closes the pipe.
 
@@ -72,6 +73,7 @@ Administrator, `SYSTEM`, kernel, browser-compromise, and same-logon-session malw
 ## Consequences
 
 - Windows becomes the first supported end-to-end platform and requires the packaged .NET helper.
+- At most one facade per Windows logon session owns browser IPC. Failure to acquire it disables the Web capability for that facade but does not terminate or reroute native Codex traffic.
 - The TypeScript runtime cannot replace the helper with `node:net` without a new security review.
 - A browser session is invalidated whenever the authenticated channel changes or disconnects. Active work terminates exactly once and is never replayed automatically.
 - The app-server Responses stub remains fail-closed until a separate adapter can preserve pinned session and catalog-revision identity without flattening unsupported Responses semantics.

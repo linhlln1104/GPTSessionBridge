@@ -20,13 +20,17 @@ The facade launches the official Codex app-server as a child process. That child
 
 ### Browser boundary
 
-The ChatGPT session will remain in Chrome. Phase 3a implements only the isolated Native Messaging transport foundation; no extension or real browser connection exists in the runtime yet. When implemented, the extension will be trusted to interact with the explicitly connected page content, but it will not be granted cookie, debugger, history, broad host, or browser-profile access.
+The ChatGPT session remains in Chrome. The Manifest V3 shell connects only a user-selected active `https://chatgpt.com` document and is trusted to exchange narrowly defined messages with that document. It has `activeTab`, `scripting`, and `nativeMessaging`, but no persistent host, cookie, debugger, history, storage, or browser-profile access. The current content adapter exposes no DOM automation and reports no usable model capability.
 
 ### Local transport boundary
 
 The Phase 2 Responses boundary binds to an ephemeral port on `127.0.0.1`, authenticates with a high-entropy process capability, and limits headers, body size, connections, requests per socket, and request lifetime.
 
-The Phase 3a Native Messaging foundation enforces an exact extension-origin allowlist, a symmetric 1 MiB frame ceiling, bounded queues, strict schemas, independent link-local sequences, and direction-specific application messages. It is not connected to the facade. Protocol `hello` frames are negotiation and are not treated as local-process authentication. Production IPC remains blocked on [ADR 0003](adr/0003-native-host-bridge-ipc.md).
+The Native Messaging runtime enforces an exact extension-origin allowlist, a symmetric 1 MiB frame ceiling, bounded queues, strict schemas, independent link-local sequences, and direction-specific application messages. Protocol `hello` frames are negotiation and are not treated as local-process authentication.
+
+On Windows, [ADR 0003](adr/0003-native-host-bridge-ipc.md) is implemented by a self-contained helper on each side of a one-instance named pipe. The server uses a protected logon-SID DACL, granular rights, first-instance ownership, and remote-client rejection. Before relaying bytes, both sides compare the pipe peer's PID/session with a retained process handle and token user SID, logon SID, and session ID. The bridge then initiates a fresh random link handshake. The pipe name and challenge are public freshness/discovery metadata, not bearer credentials.
+
+This authenticates the Windows user and logon session, not executable integrity. Same-user code already running in the same logon session, administrators, `SYSTEM`, kernel compromise, and browser compromise remain outside this boundary. Packaging, ACL-protected installation, and signing are required before production distribution.
 
 The capability lifecycle is:
 
@@ -35,25 +39,25 @@ The capability lifecycle is:
 3. For a Web-backed thread, the facade injects the endpoint and capability directly into the request's in-memory app-server configuration.
 4. The trusted Codex child uses that configuration for the local Responses request.
 5. The endpoint validates the loopback request and bearer capability before reading the bounded JSON body.
-6. In the current runtime, a valid request terminates with `session_not_connected` because no authenticated browser session transport is installed.
+6. In the current runtime, a valid request terminates with `session_not_connected` because the Responses boundary is not connected to coordinator state and cannot yet receive the pinned `catalogRevision` safely.
 7. The endpoint closes and the capability becomes unusable when the facade exits.
 
 ## Threats and controls
 
-| Threat                      | Required control                                                            |
-| --------------------------- | --------------------------------------------------------------------------- |
-| Credential extraction       | No cookie/debugger permissions; no credential fields in protocols or logs   |
-| Local process impersonation | Responses capability and loopback binding; host IPC blocked on ADR 0003     |
-| Extension impersonation     | Exact Native Messaging extension allowlist plus runtime caller-origin check |
-| Prompt or response leakage  | Memory-only processing; content-free diagnostics; synthetic fixtures        |
-| Provider confusion          | Pin the provider, model, reasoning effort, and catalog revision per thread  |
-| Silent quota crossover      | Explicit errors; no automatic Codex/Web fallback                            |
-| Duplicate submission        | Link-local sequence validation; coordinator must enforce one terminal event |
-| Unbounded input             | Frame-size, queue, timeout, and concurrency limits                          |
-| UI drift                    | Phase 3 versioned capability report and fail-closed behavior                |
-| Capability disclosure       | Memory-only token; no child environment, arguments, logs, or disk config    |
-| Provider override injection | Reject reserved request, config-write, and command-line overrides           |
-| Ambiguous thread identity   | Reject Web review/realtime flows and unsupported history or path identities |
+| Threat                      | Required control                                                             |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| Credential extraction       | No cookie/debugger permissions; no credential fields in protocols or logs    |
+| Local process impersonation | Responses capability; logon-SID pipe DACL and mutual peer-token verification |
+| Extension impersonation     | Pinned extension identity, exact allowlist, and runtime caller-origin check  |
+| Prompt or response leakage  | Memory-only processing; content-free diagnostics; synthetic fixtures         |
+| Provider confusion          | Pin the provider, model, reasoning effort, and catalog revision per thread   |
+| Silent quota crossover      | Explicit errors; no automatic Codex/Web fallback                             |
+| Duplicate submission        | Link-local sequence validation; coordinator enforces one terminal event      |
+| Unbounded input             | Frame-size, queue, timeout, and concurrency limits                           |
+| UI drift                    | Phase 3 versioned capability report and fail-closed behavior                 |
+| Capability disclosure       | Memory-only token; no child environment, arguments, logs, or disk config     |
+| Provider override injection | Reject reserved request, config-write, and command-line overrides            |
+| Ambiguous thread identity   | Reject Web review/realtime flows and unsupported history or path identities  |
 
 ## Diagnostics
 

@@ -5,11 +5,11 @@
 
 ## Decision
 
-GPTSessionBridge will interact with a ChatGPT Web session through a Manifest V3 extension attached to a tab selected by the user. It will not embed a login browser, copy a Chrome profile, or extract session credentials.
+GPTSessionBridge interacts with a ChatGPT Web session through a Manifest V3 extension attached to a tab selected by the user. It does not embed a login browser, copy a Chrome profile, or extract session credentials.
 
 ## Required permissions
 
-The extension may request Native Messaging and narrowly scoped access to `https://chatgpt.com/*`. It must not request cookie, debugger, history, broad-host, or profile access.
+The extension may request Native Messaging plus temporary `activeTab` and `scripting` access for the user-selected exact `https://chatgpt.com` document. It must not request persistent host, cookie, debugger, history, storage, broad-host, or profile access.
 
 ## Consequences
 
