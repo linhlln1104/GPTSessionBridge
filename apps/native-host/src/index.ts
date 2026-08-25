@@ -1,9 +1,5 @@
-export * from "./constants.js";
-export * from "./protocol/errors.js";
-export * from "./protocol/link-session.js";
+export * from "@gpt-session-bridge/native-messaging/link";
+export * from "@gpt-session-bridge/native-messaging/transport";
+
 export * from "./protocol/native-host-relay.js";
-export * from "./protocol/relay-policy.js";
 export * from "./runtime/extension-origin.js";
-export * from "./transport/errors.js";
-export * from "./transport/native-message-decoder.js";
-export * from "./transport/native-message-writer.js";

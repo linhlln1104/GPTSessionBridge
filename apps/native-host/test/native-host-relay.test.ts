@@ -2,11 +2,11 @@ import {
   NATIVE_MESSAGING_PROTOCOL_VERSION,
   nativeMessagingFrameSchema,
 } from "@gpt-session-bridge/protocol";
+import { NativeLinkError } from "@gpt-session-bridge/native-messaging/link";
 import { describe, expect, it } from "vitest";
 
-import { NativeLinkError } from "../src/protocol/errors.js";
 import { NativeHostRelay } from "../src/protocol/native-host-relay.js";
-import { helloAcknowledgedFrame, helloFrame } from "./fixtures.js";
+import { helloFrame } from "./fixtures.js";
 
 describe("NativeHostRelay", () => {
   it("terminates both handshakes and re-sequences application frames per link", () => {
@@ -49,17 +49,8 @@ describe("NativeHostRelay", () => {
 
   it("fails closed when an application destination is unavailable", () => {
     const relay = new NativeHostRelay({ implementationVersion: "0.1.0-test" });
-    relay.startBridgeHandshake("request-hello");
-    relay.receiveFromBridge(helloAcknowledgedFrame("bridge"));
-    const command = nativeMessagingFrameSchema.parse({
-      protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
-      requestId: "request-session",
-      sequence: 1,
-      type: "session/connect",
-      payload: { sessionId: "session-example" },
-    });
 
-    expect(() => relay.receiveFromBridge(command)).toThrow(
+    expect(() => relay.receiveFromBridge(helloFrame("bridge"))).toThrow(
       expect.objectContaining<Partial<NativeLinkError>>({ code: "destination_unavailable" }),
     );
     expect(relay.state).toEqual({ bridge: "closed", extension: "closed" });
@@ -75,12 +66,11 @@ describe("NativeHostRelay", () => {
 
 function readyRelay(): NativeHostRelay {
   const relay = new NativeHostRelay({ implementationVersion: "0.1.0-test" });
-  expect(relay.startBridgeHandshake("request-hello")).toMatchObject({
-    sequence: 0,
-    type: "hello",
-  });
-  expect(relay.receiveFromBridge(helloAcknowledgedFrame("bridge"))).toEqual({});
   expect(relay.receiveFromExtension(helloFrame("extension")).toExtension).toMatchObject({
+    sequence: 0,
+    type: "hello/acknowledged",
+  });
+  expect(relay.receiveFromBridge(helloFrame("bridge")).toBridge).toMatchObject({
     sequence: 0,
     type: "hello/acknowledged",
   });

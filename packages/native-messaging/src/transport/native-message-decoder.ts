@@ -9,7 +9,7 @@ import {
   DEFAULT_NATIVE_MESSAGE_MAX_BUFFERED_BYTES,
   DEFAULT_NATIVE_MESSAGE_MAX_FRAME_BYTES,
   NATIVE_MESSAGE_HEADER_BYTES,
-} from "../constants.js";
+} from "./constants.js";
 import { NativeMessageTransportError } from "./errors.js";
 
 export interface NativeMessageDecoderOptions {

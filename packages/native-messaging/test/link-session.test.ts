@@ -5,12 +5,12 @@ import {
 } from "@gpt-session-bridge/protocol";
 import { describe, expect, it } from "vitest";
 
-import { NativeLinkError } from "../src/protocol/errors.js";
-import { NativeLinkSession } from "../src/protocol/link-session.js";
+import { NativeLinkError } from "../src/link/errors.js";
+import { NativeLinkSession } from "../src/link/link-session.js";
 import {
   BRIDGE_TO_EXTENSION_APPLICATION_TYPES,
   EXTENSION_TO_BRIDGE_APPLICATION_TYPES,
-} from "../src/protocol/relay-policy.js";
+} from "../src/link/relay-policy.js";
 import { helloAcknowledgedFrame, helloFrame } from "./fixtures.js";
 
 describe("NativeLinkSession", () => {

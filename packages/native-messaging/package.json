@@ -1,17 +1,24 @@
 {
-  "name": "@gpt-session-bridge/native-host",
+  "name": "@gpt-session-bridge/native-messaging",
   "version": "0.1.0",
   "private": true,
-  "description": "Bounded Chrome Native Messaging transport for GPTSessionBridge.",
+  "description": "Bounded Native Messaging link and Node transport primitives for GPTSessionBridge.",
   "type": "module",
   "sideEffects": false,
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
   "files": [
     "dist"
   ],
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+    "./link": {
+      "types": "./dist/link/index.d.ts",
+      "import": "./dist/link/index.js"
+    },
+    "./transport": {
+      "types": "./dist/transport/index.d.ts",
+      "import": "./dist/transport/index.js"
     }
   },
   "scripts": {
@@ -21,7 +28,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@gpt-session-bridge/native-messaging": "workspace:*",
     "@gpt-session-bridge/protocol": "workspace:*"
   },
   "devDependencies": {
@@ -29,8 +35,5 @@
     "@vitest/coverage-v8": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
-  },
-  "engines": {
-    "node": ">=24.0.0 <25"
   }
 }

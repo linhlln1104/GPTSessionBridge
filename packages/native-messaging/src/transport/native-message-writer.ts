@@ -10,7 +10,7 @@ import {
   DEFAULT_NATIVE_MESSAGE_MAX_QUEUED_BYTES,
   DEFAULT_NATIVE_MESSAGE_MAX_QUEUED_MESSAGES,
   NATIVE_MESSAGE_HEADER_BYTES,
-} from "../constants.js";
+} from "./constants.js";
 import { NativeMessageTransportError, type NativeMessageTransportErrorCode } from "./errors.js";
 
 export interface NativeMessageWriterOptions {

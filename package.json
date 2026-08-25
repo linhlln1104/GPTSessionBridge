@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "pnpm --recursive --if-present build",
-    "build:workspace-deps": "pnpm --filter @gpt-session-bridge/protocol --filter @gpt-session-bridge/core --if-present build",
+    "build:workspace-deps": "pnpm --filter @gpt-session-bridge/protocol --filter @gpt-session-bridge/core --filter @gpt-session-bridge/native-messaging --if-present build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "pnpm build:workspace-deps && eslint . --max-warnings=0",

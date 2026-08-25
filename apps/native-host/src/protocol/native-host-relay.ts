@@ -1,11 +1,11 @@
 import type { NativeMessagingFrame } from "@gpt-session-bridge/protocol";
-
-import { NativeLinkError } from "./errors.js";
-import { NativeLinkSession, type NativeLinkState } from "./link-session.js";
 import {
   BRIDGE_TO_EXTENSION_APPLICATION_TYPES,
   EXTENSION_TO_BRIDGE_APPLICATION_TYPES,
-} from "./relay-policy.js";
+  NativeLinkError,
+  NativeLinkSession,
+  type NativeLinkState,
+} from "@gpt-session-bridge/native-messaging/link";
 
 export interface NativeHostRelayOptions {
   readonly implementationVersion: string;
@@ -36,7 +36,7 @@ export class NativeHostRelay {
       implementationVersion: options.implementationVersion,
       incomingApplicationTypes: BRIDGE_TO_EXTENSION_APPLICATION_TYPES,
       localPeer: "nativeHost",
-      mode: "initiator",
+      mode: "responder",
       outgoingApplicationTypes: EXTENSION_TO_BRIDGE_APPLICATION_TYPES,
       remotePeer: "bridge",
     });
@@ -54,12 +54,11 @@ export class NativeHostRelay {
     return Object.freeze({ bridge: this.#bridge.state, extension: this.#extension.state });
   }
 
-  public startBridgeHandshake(requestId: string): NativeMessagingFrame {
-    return this.#guard(() => this.#bridge.start(requestId));
-  }
-
   public receiveFromBridge(value: unknown): NativeHostRelayResult {
     return this.#guard(() => {
+      if (this.#bridge.state === "awaitingHello" && this.#extension.state !== "ready") {
+        throw new NativeLinkError("destination_unavailable");
+      }
       const result = this.#bridge.receive(value);
       if (result.response !== undefined) {
         return { toBridge: result.response };

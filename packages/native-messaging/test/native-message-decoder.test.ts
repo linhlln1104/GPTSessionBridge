@@ -21,13 +21,13 @@ describe("NativeMessageDecoder", () => {
         sessionId: "session-example",
         turnId: "turn-example",
         channel: "outputText",
-        delta: "Xin chào 👋",
+        delta: "Xin chÃ o ðŸ‘‹",
       },
     });
     const first = encodeNativeMessage(helloFrame("extension"));
     const second = encodeNativeMessage(delta);
     const combined = Buffer.concat([first, second]);
-    const emojiStart = combined.indexOf(Buffer.from("👋", "utf8"));
+    const emojiStart = combined.indexOf(Buffer.from("ðŸ‘‹", "utf8"));
     const decoder = new NativeMessageDecoder(decoderOptions);
 
     expect(decoder.push(combined.subarray(0, 2))).toEqual([]);
