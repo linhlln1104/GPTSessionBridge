@@ -1,5 +1,6 @@
 export const BRIDGE_RUNTIME_ERROR_CODES = [
   "already_active",
+  "browser_ipc_unavailable",
   "child_exited",
   "codex_not_found",
   "invalid_codex_executable",

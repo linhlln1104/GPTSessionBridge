@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@gpt-session-bridge/core": "workspace:*",
+    "@gpt-session-bridge/native-messaging": "workspace:*",
     "@gpt-session-bridge/protocol": "workspace:*"
   },
   "devDependencies": {

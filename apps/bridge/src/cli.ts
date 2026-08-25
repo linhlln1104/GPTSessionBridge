@@ -15,6 +15,10 @@ import { AppServerRouter } from "./facade/app-server-router.js";
 import { BidirectionalAppServerProxy } from "./facade/bidirectional-proxy.js";
 import { createDefaultFacadeState } from "./facade/default-state.js";
 import { ResponsesStubServer } from "./http/responses-stub.js";
+import {
+  createDefaultBrowserIpcRuntime,
+  type BrowserIpcRuntime,
+} from "./runtime/browser-ipc-runtime.js";
 import { CodexChild } from "./runtime/codex-child.js";
 import { resolveCodexExecutable } from "./runtime/codex-executable.js";
 import { BridgeRuntimeError } from "./runtime/errors.js";
@@ -86,6 +90,7 @@ const STDIO_LISTEN_URL = "stdio://";
 const LOOPBACK_NO_PROXY_ENTRIES = Object.freeze(["localhost", "127.0.0.1", "::1"]);
 
 export interface RunCliOptions {
+  readonly browserIpc?: BrowserIpcRuntime | null;
   readonly bridgeExecutable?: string;
   readonly clientInput?: Readable;
   readonly clientOutput?: Writable;
@@ -222,6 +227,11 @@ export async function runCli(
     return runPassthrough(executable, args, env);
   }
 
+  const browserIpc =
+    options.browserIpc === undefined
+      ? createDefaultBrowserIpcRuntime(import.meta.url)
+      : (options.browserIpc ?? undefined);
+
   return runAppServerFacade({
     args,
     clientInput: options.clientInput ?? process.stdin,
@@ -229,11 +239,13 @@ export async function runCli(
     env,
     executable,
     registerSignalHandlers: options.registerSignalHandlers ?? true,
+    ...(browserIpc === undefined ? {} : { browserIpc }),
   });
 }
 
 export interface RunAppServerFacadeOptions {
   readonly args: readonly string[];
+  readonly browserIpc?: BrowserIpcRuntime;
   readonly clientInput: Readable;
   readonly clientOutput: Writable;
   readonly env: Readonly<NodeJS.ProcessEnv>;
@@ -260,6 +272,8 @@ export async function runAppServerFacade(options: RunAppServerFacadeOptions): Pr
   });
 
   let childStarted = false;
+  let browserIpcStarted = false;
+  let browserIpcMonitor: Promise<void> | undefined;
   let proxy: BidirectionalAppServerProxy | undefined;
   let requestedSignal: NodeJS.Signals | undefined;
   const stopForSignal = (signal: NodeJS.Signals): void => {
@@ -274,6 +288,20 @@ export async function runAppServerFacade(options: RunAppServerFacadeOptions): Pr
   };
 
   try {
+    if (options.browserIpc !== undefined) {
+      const browserIpc = options.browserIpc;
+      try {
+        await browserIpc.start();
+        browserIpcStarted = true;
+        browserIpcMonitor = browserIpc.completion.then(
+          () => browserIpc.close(),
+          () => browserIpc.close(),
+        );
+        void browserIpcMonitor.catch(() => undefined);
+      } catch {
+        await browserIpc.close().catch(() => undefined);
+      }
+    }
     const address = await stub.start();
     const childProcess = child.start();
     childStarted = true;
@@ -326,6 +354,10 @@ export async function runAppServerFacade(options: RunAppServerFacadeOptions): Pr
     proxy?.stop();
     if (childStarted && child.state !== "exited") {
       await child.shutdown().catch(() => undefined);
+    }
+    if (browserIpcStarted) {
+      await options.browserIpc?.close().catch(() => undefined);
+      await browserIpcMonitor?.catch(() => undefined);
     }
     await stub.close();
   }

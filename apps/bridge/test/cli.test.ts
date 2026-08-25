@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { isAppServerInvocation, runAppServerFacade, runCli } from "../src/cli.js";
 import { BRIDGE_ACTIVE_ENV, BRIDGE_ACTIVE_VALUE, CODEX_EXECUTABLE_ENV } from "../src/constants.js";
+import type { BrowserIpcRuntime } from "../src/runtime/browser-ipc-runtime.js";
 
 const FAKE_APP_SERVER = fileURLToPath(
   new URL("./fixtures/fake-codex-app-server.mjs", import.meta.url),
@@ -118,8 +119,10 @@ describe("app-server facade runtime", () => {
     const clientInput = new PassThrough();
     const clientOutput = new PassThrough();
     const outputFrames = readFrames(clientOutput, 3);
+    const browserIpc = new FakeBrowserIpcRuntime();
     const completion = runAppServerFacade({
       args: [FAKE_APP_SERVER, "app-server"],
+      browserIpc,
       clientInput,
       clientOutput,
       env: minimalChildEnvironment(),
@@ -157,6 +160,8 @@ describe("app-server facade runtime", () => {
 
     clientInput.end();
     await expect(completion).resolves.toBe(0);
+    expect(browserIpc.startCount).toBe(1);
+    expect(browserIpc.closeCount).toBe(1);
   });
 
   it("returns a child exit code when the app-server process exits first", async () => {
@@ -173,7 +178,101 @@ describe("app-server facade runtime", () => {
       }),
     ).resolves.toBe(7);
   });
+
+  it("keeps native Codex available and releases browser IPC when broker startup fails", async () => {
+    const browserIpc = new FakeBrowserIpcRuntime();
+    browserIpc.startError = new Error("synthetic browser IPC startup failure");
+    const clientInput = new PassThrough();
+    const completion = runAppServerFacade({
+      args: [FAKE_APP_SERVER, "app-server"],
+      browserIpc,
+      clientInput,
+      clientOutput: new PassThrough(),
+      env: minimalChildEnvironment(),
+      executable: process.execPath,
+      registerSignalHandlers: false,
+    });
+    clientInput.end();
+
+    await expect(completion).resolves.toBe(0);
+    expect(browserIpc.closeCount).toBe(1);
+  });
+
+  it("keeps native Codex available when an active browser IPC broker fails", async () => {
+    const browserIpc = new FakeBrowserIpcRuntime();
+    const clientInput = new PassThrough();
+    const completion = runAppServerFacade({
+      args: [FAKE_APP_SERVER, "app-server"],
+      browserIpc,
+      clientInput,
+      clientOutput: new PassThrough(),
+      env: minimalChildEnvironment(),
+      executable: process.execPath,
+      registerSignalHandlers: false,
+    });
+    await browserIpc.started;
+    browserIpc.fail();
+    clientInput.end();
+
+    await expect(completion).resolves.toBe(0);
+    expect(browserIpc.closeCount).toBe(1);
+  });
 });
+
+class FakeBrowserIpcRuntime implements BrowserIpcRuntime {
+  public closeCount = 0;
+  public startCount = 0;
+  public startError: Error | undefined;
+  public readonly completion: Promise<void>;
+  public readonly started: Promise<void>;
+  readonly #rejectCompletion: (error: Error) => void;
+  readonly #resolveCompletion: () => void;
+  readonly #resolveStarted: () => void;
+  #closed = false;
+
+  public constructor() {
+    let rejectCompletion: ((error: Error) => void) | undefined;
+    let resolveCompletion: (() => void) | undefined;
+    let resolveStarted: (() => void) | undefined;
+    this.completion = new Promise<void>((resolve, reject) => {
+      rejectCompletion = reject;
+      resolveCompletion = resolve;
+    });
+    void this.completion.catch(() => undefined);
+    this.started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    this.#rejectCompletion = (error) => {
+      rejectCompletion?.(error);
+    };
+    this.#resolveCompletion = () => {
+      resolveCompletion?.();
+    };
+    this.#resolveStarted = () => {
+      resolveStarted?.();
+    };
+  }
+
+  public close(): Promise<void> {
+    if (this.#closed) {
+      return Promise.resolve();
+    }
+    this.#closed = true;
+    this.closeCount += 1;
+    this.#resolveCompletion();
+    return Promise.resolve();
+  }
+
+  public fail(): void {
+    this.#rejectCompletion(new Error("synthetic browser IPC failure"));
+  }
+
+  public start(): Promise<void> {
+    this.startCount += 1;
+    this.#resolveStarted();
+    return this.startError === undefined ? Promise.resolve() : Promise.reject(this.startError);
+  }
+}
 
 function minimalChildEnvironment(): Readonly<NodeJS.ProcessEnv> {
   const path = process.env["PATH"];

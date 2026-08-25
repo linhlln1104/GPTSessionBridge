@@ -59,6 +59,9 @@ importers:
       '@gpt-session-bridge/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@gpt-session-bridge/native-messaging':
+        specifier: workspace:*
+        version: link:../../packages/native-messaging
       '@gpt-session-bridge/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

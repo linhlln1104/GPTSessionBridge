@@ -2,10 +2,15 @@ import { once } from "node:events";
 import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BRIDGE_ACTIVE_ENV } from "../src/constants.js";
+import {
+  createDefaultBrowserIpcRuntime,
+  resolveWindowsIpcHelperExecutable,
+} from "../src/runtime/browser-ipc-runtime.js";
 import { CodexChild } from "../src/runtime/codex-child.js";
 import { resolveCodexExecutable } from "../src/runtime/codex-executable.js";
 
@@ -57,6 +62,58 @@ describe("resolveCodexExecutable", () => {
     await expect(resolveCodexExecutable({ path: "." })).rejects.toMatchObject({
       code: "codex_not_found",
     });
+  });
+});
+
+describe("Windows browser IPC runtime", () => {
+  const syntheticCliUrl = pathToFileURL(
+    join(process.cwd(), "apps", "bridge", "dist", "cli.js"),
+  ).href;
+
+  it("resolves only the canonical self-contained x64 helper", () => {
+    let inspectedPath: string | undefined;
+    const resolved = resolveWindowsIpcHelperExecutable(
+      syntheticCliUrl,
+      "win32",
+      "x64",
+      (candidate) => {
+        inspectedPath = candidate;
+        return true;
+      },
+    );
+
+    expect(resolved).toBe(inspectedPath);
+    expect(resolved).toBe(
+      join(
+        process.cwd(),
+        "native",
+        "windows-ipc",
+        "artifacts",
+        "win-x64",
+        "gptsessionbridge-windows-ipc.exe",
+      ),
+    );
+    expect(() =>
+      resolveWindowsIpcHelperExecutable(syntheticCliUrl, "win32", "arm64", () => true),
+    ).toThrow(expect.objectContaining({ code: "browser_ipc_unavailable" }));
+    expect(() =>
+      resolveWindowsIpcHelperExecutable(syntheticCliUrl, "win32", "x64", () => false),
+    ).toThrow(expect.objectContaining({ code: "browser_ipc_unavailable" }));
+  });
+
+  it("enables the broker only on the supported Windows platform", async () => {
+    expect(createDefaultBrowserIpcRuntime(syntheticCliUrl, "linux", "x64", () => true)).toBe(
+      undefined,
+    );
+    const runtime = createDefaultBrowserIpcRuntime(syntheticCliUrl, "win32", "x64", () => true);
+    expect(runtime).toBeDefined();
+    await runtime?.close();
+    expect(createDefaultBrowserIpcRuntime(syntheticCliUrl, "win32", "arm64", () => true)).toBe(
+      undefined,
+    );
+    expect(createDefaultBrowserIpcRuntime(syntheticCliUrl, "win32", "x64", () => false)).toBe(
+      undefined,
+    );
   });
 });
 
