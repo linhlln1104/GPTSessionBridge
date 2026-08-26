@@ -30,7 +30,7 @@ The direct picker is discovered through visible semantics. The observed nested p
 
 ### Local transport boundary
 
-The Responses boundary binds to an ephemeral port on `127.0.0.1`, authenticates with a high-entropy process capability, and limits headers, body size, connections, requests per socket, request lifetime, and output size. It resolves opaque provider model tokens only against the coordinator's current catalog snapshot and forwards the exact catalog revision and visible-UI model identity. It accepts a strict user-text subset and rejects unsupported semantics rather than flattening them.
+The Responses boundary binds to an ephemeral port on `127.0.0.1`, authenticates with a high-entropy process capability, and limits headers, body size, connections, requests per socket, request lifetime, and output size. It resolves opaque provider model tokens only against the coordinator's current catalog snapshot and forwards the exact catalog revision and visible-UI model identity. A `text-v1` route accepts a strict user-text subset. An activation-gated `agent-v2` route uses a separate current-Codex projector, certified closed-schema function profile, bounded pending-workflow registry, and exact cumulative continuation binding. Unsupported semantics fail closed rather than being flattened into prose.
 
 The Native Messaging runtime enforces an exact extension-origin allowlist, a symmetric 1 MiB frame ceiling, bounded queues, strict schemas, independent link-local sequences, and direction-specific application messages. Protocol `hello` frames are negotiation and are not treated as local-process authentication.
 
@@ -38,11 +38,13 @@ On Windows, [ADR 0003](adr/0003-native-host-bridge-ipc.md) is implemented by a s
 
 This authenticates the Windows user and logon session, not executable integrity. Same-user code already running in the same logon session, administrators, `SYSTEM`, kernel compromise, and browser compromise remain outside this boundary. The development SEA package and content hashes detect post-manifest mutation and copy corruption, not a compromised or incorrect build; they are not a signature or a protected installation identity. ACL-protected installation and signing remain required before production distribution.
 
-### Inactive Web Agent boundary
+### Web Agent boundary
 
-Protocol v2 code is present only as isolated, in-process admission, lifecycle, schema, coordinator, and one-shot adapter boundaries. It has no active HTTP listener, Native Messaging/page protocol route, DOM-agent transport, or model-catalog entry. The coordinator binds the exact request prefix, certified serial tool manifest, selected browser document, route, child thread/turn, workflow round, and one pending function call; a committed call is never replayed. These checks do not authorize or execute a tool. Approval, sandbox, and execution authority remains exclusively in the official Codex child.
+Protocol v2 is connected through the authenticated Responses listener, browser coordinator, Native Messaging/page protocol v2, one-shot selected-document permit, and exact DOM-agent response path. The coordinator binds the canonical request and cumulative child history, certified serial tool manifest, selected browser document, route, child request metadata, workflow round, and one pending function call; a committed call is never replayed. These checks do not authorize or execute a tool. Approval, sandbox, and execution authority remains exclusively in the official Codex child.
 
-The extension exposes a separate memory-only consent lease for the exact selected tab and document. It starts only after an explicit disclosure gesture, expires after 15 minutes without admitted agent activity, and is invalidated by navigation, document replacement, disconnect, extension restart, or explicit deactivation. Connecting a text-only tab, opening the popup, or reading status does not activate or renew it. Until v2 transport negotiation, atomic DOM ownership, child-contract fixtures, and release approval are complete, protocol v1 continues to report `toolCalls: false`.
+The extension exposes a separate memory-only consent lease for the exact selected tab and document. It starts only after an explicit disclosure gesture, expires after 15 minutes without admitted agent activity, and is invalidated by unrelated navigation, document replacement, disconnect, extension restart, or explicit deactivation. Connecting a text-only tab, opening the popup, or reading status does not activate or renew it. A `Web Agent · …` entry is published only while the authenticated active snapshot matches the selected session and document. The separate text capability continues to report `toolCalls: false`; that field is not used as v2 authorization.
+
+The bridge does not receive authoritative sandbox or approval-policy state in the provider request and therefore does not claim to enforce a second policy floor. It cannot answer an approval request or execute a proposal. Users retain the official Codex child's configured policy, and a proposal becomes local activity only through that child's normal function-call lifecycle.
 
 ### Development setup boundary
 
@@ -58,7 +60,7 @@ The capability lifecycle is:
 4. The trusted Codex child uses that configuration for the local Responses request.
 5. The endpoint validates the loopback request and bearer capability before reading the bounded JSON body.
 6. The endpoint resolves the opaque provider model only against the current coordinator snapshot, then starts a turn with the pinned `catalogRevision`, model, and reasoning choice.
-7. The selected document performs a final catalog/model revalidation, synchronously writes and submits bounded text, and streams bounded visible assistant text. Later catalog updates affect future routes only, while start-confirmation, ownership, or response-surface failure terminates the active turn without replay.
+7. The selected document performs a final catalog/model revalidation and synchronously writes and submits bounded visible text. A text turn streams bounded assistant text; an agent turn buffers exact bounded visible text for whole-envelope validation. Later catalog updates affect future routes only, while start-confirmation, ownership, or response-surface failure terminates the active turn without replay.
 8. The endpoint closes and the capability becomes unusable when the facade exits.
 
 ## Threats and controls
@@ -80,7 +82,7 @@ The capability lifecycle is:
 | Provider override injection | Reject reserved request, config-write, and command-line overrides                |
 | Ambiguous thread identity   | Reject Web review/realtime flows and unsupported history or path identities      |
 
-The text-only Responses contract accepts exactly one user text item. It does not accept multiple messages or parts, developer-role input, instructions, tool definitions, or tool calls. Normal Codex coding requests in the tested snapshot include unsupported semantics and therefore fail closed rather than being joined or flattened into user prose.
+The text-only Responses contract accepts exactly one user text item. It does not accept multiple messages or parts, developer-role input, instructions, tool definitions, or tool calls. Normal Codex coding requests in the tested snapshot include unsupported semantics and therefore fail closed on that route rather than being joined or flattened into user prose. The separately selected Web Agent route projects only the tested developer/user text and locally certifiable function tools into a visible compatibility prompt; this projection does not preserve native role priority or full Responses semantics.
 
 ## Diagnostics
 
@@ -92,7 +94,7 @@ Debug mode does not relax these rules. A future support bundle must be opt-in, t
 
 The facade owns the reserved Web provider definition. A client cannot replace its base URL, capability, retry policy, or authentication flags through request-local provider configuration. Web routes disable provider fallback and pin the selected public model, provider model, reasoning effort, and catalog revision to the thread. Reserved model/provider values are also rejected in app-server config writes and command-line overrides.
 
-Derived Web threads are accepted only when the facade can verify and pin their route. Reviews, realtime sessions, and steering are rejected for Web threads because their execution identity cannot yet be bound safely. A Web `thread/resume` request with inline history, or a Web resume/fork request carrying any rollout path, is also rejected because Phase 2 cannot prove that the supplied identity belongs to the pinned route.
+Derived Web threads are accepted only when the facade can verify and pin their route. Reviews, realtime sessions, and steering are rejected for Web threads because their execution identity cannot yet be bound safely. A Web `thread/resume` request with inline history, or a Web resume/fork request carrying a non-empty rollout path, is also rejected because the current process-local routing design cannot prove that the supplied identity belongs to the pinned route. Codex defines an empty path as absent, so it remains bound to `threadId`. These guards run only for Web routes; native lifecycle parameters pass through unchanged.
 
 Resume/fork sources are quarantined until the lifecycle response is validated. During that window, pipelined thread operations are rejected, server-initiated requests receive an error, and client responses to server requests are dropped. If a lifecycle response returns a mismatched model, provider, or thread identity, the facade records a bounded tombstone and terminates the proxy session.
 

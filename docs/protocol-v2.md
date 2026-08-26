@@ -1,6 +1,6 @@
 # Tool-Capable Web Workflow Protocol v2
 
-- Status: Experimental; inactive boundaries implemented, runtime and catalog disabled
+- Status: Experimental personal-use MVP; active only behind an exact document-bound consent lease
 - Version: 2
 - Decision: [ADR 0005](adr/0005-tool-capable-web-protocol-v2.md)
 
@@ -8,7 +8,7 @@
 
 This document specifies a bounded function-tool workflow between the official Codex child and one user-selected ChatGPT Web document. It defines request admission, browser-visible envelopes, local binding, state transitions, Responses mapping, limits, failure behavior, and activation gates.
 
-Protocol v2 is a workflow layered above the existing browser transport. It does not change the Native Messaging or page-message version by implication. Until separately implemented and negotiated, those transports remain protocol v1 and advertise `toolCalls: false`.
+Protocol v2 is a workflow layered above Native Messaging protocol v2 and its strictly parsed page-message transport. Agent availability is negotiated through separate activation-status messages and an exact one-shot agent-turn command. The visible-model capability snapshot continues to report `toolCalls: false` for the independent text-turn contract; that field is not the Web Agent activation signal.
 
 The key words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative.
 
@@ -26,36 +26,36 @@ All model and page content is untrusted. Successful envelope parsing means only 
 
 ## 3. Activation profile
 
-The initial profile is named `Web Agent (experimental)` and is distinct from the text-only `Web` profile.
+The user-facing profile is named `Web Agent · <visible model>` and is distinct from the text-only `Web · <visible model>` profile.
 
 Activation requires:
 
 1. an explicit user gesture in the extension for the exact selected `https://chatgpt.com` main-frame document;
 2. a privacy disclosure accepted for the current lease;
-3. an approval-capable app-server client;
-4. verified `read-only` sandbox and `on-request` approval policy;
-5. an exact certified tool-profile version; and
-6. all release gates in section 14.
+3. an active status snapshot returned through the authenticated browser transport for that same document generation;
+4. explicit selection of the corresponding revision-bound `agent-v2` model route;
+5. a request matching the tested Codex provider contract and a locally certified closed-schema function-tool profile; and
+6. a fresh, transcript-free ChatGPT `/` surface for the first round.
 
-The activation lease expires on document or tab replacement, navigation, disconnect, bridge restart, explicit deactivation, or 15 minutes of inactivity. Every v2 turn MUST select the experimental model while a current lease exists. No request can create or renew the lease implicitly.
+The activation lease expires on document or tab replacement, unrelated navigation, disconnect, bridge restart, explicit deactivation, or 15 minutes of inactivity. The adapter may adopt only the initial `/` to `/c/...` transition anchored to its own submitted first message. Every v2 workflow MUST use the explicitly selected Web Agent route while a current lease exists. No provider request can create the lease implicitly; only admitted agent activity against the exact active binding can renew its inactivity deadline.
 
-The runtime MUST reject `danger-full-access`, approval policy `never`, an unavailable approval channel, or an unknown policy state. A future policy expansion requires a new ADR or an explicit amendment to ADR 0005.
+The bridge does not receive an authoritative sandbox or approval-policy field in the admitted Responses request and therefore does not claim to enforce a second policy floor. The official Codex child and its connected client remain responsible for their configured sandbox, approval decisions, and execution lifecycle. The bridge and extension MUST NOT answer an approval request, execute a proposal, or weaken that policy. A future claim of bridge-enforced policy requires an authoritative app-server contract, fixtures, and an explicit amendment to ADR 0005.
 
 ## 4. Request admission and projection
 
 ### 4.1 Initial request
 
-The v2 Responses endpoint MUST use an exact-key parser tied to a tested Codex child contract. At minimum, the admitted projection can contain:
+The v2 Responses endpoint MUST use an allowlisted projector tied to a tested Codex child contract. The canonical request admitted by `ResponsesServerV2` contains:
 
 - one current opaque Web provider model route;
 - bounded `instructions`;
 - ordered, text-only developer and user message content;
-- a versioned list of allowlisted function tools with exact names, descriptions, and closed JSON schemas;
+- a dynamically versioned list of locally certified function tools with exact names, descriptions, strict flags, and closed JSON schemas;
 - `store: false`;
-- the certified streaming, reasoning, tool-choice, and parallel-call compatibility values; and
-- bounded local compatibility metadata required to validate a continuation.
+- the admitted streaming and reasoning values, `tool_choice: "auto"`, and bridge-enforced serial function calls; and
+- no browser-visible local compatibility metadata.
 
-Unknown fields, media, remote MCP tools, built-in tools, namespaces, unsupported item types, persistence, or values outside the certified contract MUST fail closed. Acceptance of a field as compatibility metadata MUST NOT imply that an unsupported semantic effect was preserved.
+Fields observed in the tested Codex request but not represented by the Web compatibility workflow may be discarded only by the explicit projector; they are never forwarded by object spread. Media, unsupported input item types, persistence, a conflicting tool choice, invalid function tools, or values outside the certified contract MUST fail closed. Namespace, built-in, remote, MCP, and app entries do not become callable Web tools. Acceptance or omission of compatibility metadata MUST NOT imply that an unsupported semantic effect was preserved.
 
 Developer instructions and developer-role messages are projected into labeled sections of one visible user message. This transformation does **not** preserve native developer-over-user priority. Activation is consent to that semantic loss; diagnostics and UI MUST NOT describe the route as fully Responses-compatible.
 
@@ -72,14 +72,9 @@ The visible projection uses a public random workflow alias and contains only the
 
 ### 4.2 Tool profile
 
-The first certifiable profile is limited to exact-schema versions of:
+The MVP derives one memory-only profile from the function-tool entries in the tested Codex request. It retains at most 32 function tools whose parameters fit the local certified, recursively closed JSON Schema subset, and it requires `exec_command` to be present. The exact ordered names, descriptions, strict flags, and schemas determine a dynamic profile version and manifest digest. A malformed or uncertifiable function entry rejects the request rather than being silently removed.
 
-- `exec_command`;
-- `write_stdin`;
-- `update_plan`; and
-- `request_user_input`.
-
-`apply_patch` remains excluded until its request, approval, result, and continuation contract has its own fixture. Built-in Web search, namespaces, MCP/apps, plugin installation, image or audio input, and non-text tool results are excluded from the first profile.
+Namespace markers, built-in Web search, remote tools, MCP/apps, plugin-installation entries, image or audio input, and non-text tool results are not included in the callable Web manifest. Their presence in the broader Codex tool array does not grant the browser or bridge authority to run them. Adding a newly shaped function schema requires the local schema certifier and current-child contract fixtures to accept it.
 
 Each tool schema MUST:
 
@@ -87,7 +82,7 @@ Each tool schema MUST:
 - reject unknown properties recursively;
 - contain no remote reference or executable transformation;
 - fit the manifest limits in section 10; and
-- match the schema digest certified for the selected profile.
+- fit the exact locally certified schema subset retained in the selected profile.
 
 The manifest is the exact closed object `{ "parallelToolCalls": false, "profileVersion": string, "tools": [...] }`. It is canonicalized using the restricted RFC 8785 profile below and hashed with SHA-256. Its visible value has the form `sha256-` followed by the canonical unpadded base64url encoding of exactly 32 digest bytes. A decoder MUST reject non-zero padding bits or any decode/re-encode mismatch. Any parallel-call policy, profile version, tool, ordering, description, or schema change produces a different digest and invalidates the active workflow.
 
@@ -116,12 +111,9 @@ The digest line is unpadded base64url over the SHA-256 digest of the canonical U
 
 ### 4.3 Continuation request
 
-After the child completes a tool call, its continuation MUST preserve the exact canonical initial prefix and tool manifest. Its appended suffix MUST contain:
+After the child completes a tool call, its continuation MUST preserve the exact canonical message prefix and derived tool profile. Codex sends cumulative function history: after the message prefix, the request contains alternating bridge-issued function-call items and matching function-call outputs. Every prior pair MUST match the workflow's cumulative-history digest, and the newly appended final pair MUST contain the exact pending call and its matching real `call_id`. The projector passes only that latest pair to the one-round `ResponsesServerV2` continuation boundary and advances the cumulative-history binding for the next round.
 
-1. the exact bridge-issued function-call item; and
-2. exactly one function-call output with the matching real `call_id`.
-
-The model, local `prompt_cache_key`, request-prefix digest, manifest digest, Codex thread/turn binding, and provider route MUST match the initial binding. Missing, reordered, duplicated, or additional call/output items fail with `child_continuation_mismatch`.
+The model route, function-profile fingerprint, message prefix, cumulative call/output history, admitted child request metadata, and provider route MUST match the active workflow binding. Missing, reordered, duplicated, mutated, or additional call/output items fail closed as contract drift or `child_continuation_mismatch`.
 
 Tool output is untrusted text. The bridge serializes it into a `tool_result` envelope, creates a fresh challenge for round `n + 1`, and submits it through the same owned conversation. It MUST NOT interpret output as protocol framing, silently truncate it, or submit it to a different document.
 
@@ -135,7 +127,7 @@ For every active workflow, the bridge retains one immutable binding record conta
 - owned conversation path and first adapter-created user-message identity;
 - catalog revision, browser model ID, and provider route;
 - Codex thread and turn identity;
-- canonical initial-request prefix digest and local `prompt_cache_key` binding;
+- canonical initial-request prefix and cumulative continuation-history digests;
 - exact tool profile, canonical manifest, schemas, and manifest digest;
 - public workflow alias, current round, and current challenge; and
 - committed call state, real call ID, public call reference, tool name, argument digest, and result state.
@@ -316,9 +308,8 @@ Failures are terminal unless a future specification marks a code retryable. Erro
 
 | Code                            | Condition                                                                  |
 | ------------------------------- | -------------------------------------------------------------------------- |
-| `tool_protocol_not_activated`   | No valid user activation lease or experimental route selection             |
-| `approval_channel_unavailable`  | The official child cannot obtain required approval through its client      |
-| `unsupported_tool_profile`      | Profile, policy, tool, or schema is not certified                          |
+| `tool_protocol_not_activated`   | No valid user activation lease or matching agent route selection           |
+| `unsupported_tool_profile`      | Function profile, tool, or schema is not locally certified                 |
 | `tool_manifest_changed`         | Canonical manifest differs from the request-bound snapshot                 |
 | `protocol_envelope_invalid`     | Framing, JSON, exact keys, or base schema is invalid                       |
 | `protocol_envelope_too_large`   | Complete envelope exceeds its byte limit                                   |
@@ -371,27 +362,38 @@ Developer context, source excerpts, commands, and child-produced tool output sen
 
 The challenge, workflow alias, call reference, and manifest digest are not credentials. They MUST NOT be described as authentication or used to authorize execution.
 
-## 14. Release gates
+## 14. MVP activation and release gates
 
-The v2 capability remains disabled until all gates pass:
+The runtime advertises a Web Agent entry only when all per-document activation gates pass:
 
-- exact request and continuation fixtures for the supported Codex child version;
-- proof that tool execution, approval, and sandboxing stay in the official child;
-- strict codec and canonicalization tests for every schema, limit, and digest vector in this document;
-- adversarial cases for duplicate keys, extra prose, Markdown fences, stale challenges, replay, forged call references, unknown tools, schema drift, deep or oversized arguments, injected framing text, continuation-prefix mutation, cross-thread collision, duplicate DOM delivery, and disconnect before and after commit;
-- an assertion that each accepted proposal produces zero or one, never two, child executions;
-- direct Chrome DOM-runtime coverage for complete buffering, exact prompt/response ownership, model and catalog drift, navigation, cancellation, and teardown;
-- extension activation lease, expiry, disclosure, and deactivation tests;
-- content-free diagnostics and secret/policy scans; and
-- explicit capability-negotiation and release approval.
+- the user connected one exact supported main-frame document and accepted the current disclosure;
+- the extension reports a current active lease through authenticated Native Messaging v2;
+- the coordinator can bind the exact session generation, document, conversation ownership, catalog revision, visible model, and provider route;
+- the initial surface is a fresh `/` conversation with no visible transcript;
+- the provider request matches the current Codex contract projection and every retained function tool has a certified closed schema; and
+- no text or agent turn is already active for the selected browser session.
 
-Passing a codec unit test or adding a v2 source module is insufficient to advertise tools. Protocol v1 remains the production behavior until every gate is complete.
+Repository verification covers the request and cumulative-continuation projector, strict codecs and canonicalization, adversarial envelope and schema cases, at-most-once commit, activation expiry and invalidation, authenticated agent transport, one-shot page permits, and the production DOM driver on synthetic Chrome documents. Passing these gates enables only the unsigned personal-use MVP.
+
+The following remain release and compatibility gates rather than implemented guarantees:
+
+- a packaged extension and Native Host exercised end to end through a real Chrome profile;
+- a successful current-account ChatGPT turn and IDE coding workflow;
+- stable or localized ChatGPT DOM compatibility;
+- independent security review, protected installation, code signing, and a production extension identity; and
+- a published supported-version policy beyond the exact development snapshot.
+
+The absence of those certifications MUST remain visible in the README, security policy, and compatibility matrix. A synthetic fixture or successful personal run is not a public support claim.
 
 ## 15. Current status
 
-The repository implements the strict Responses request/lifecycle boundary, certified-schema evaluator, in-memory agent-session coordinator, typed one-shot adapter, and extension-local activation/consent lease. They are deliberately isolated from the active HTTP, Native Messaging, page-message, DOM-agent, and model-catalog paths.
+The personal-use MVP connects the v2 path end to end in source: an `agent-v2` provider route dispatches to the current-Codex projector, `ResponsesServerV2`, `ResponsesAgentRuntime`, `ResponsesV2AgentSessionAdapter`, and `AgentSessionCoordinator`; the browser boundary revalidates the active lease; Native Messaging and page protocol v2 carry one-shot agent turns; the production DOM driver returns exact complete text; and the catalog publishes `Web Agent · …` only while the exact lease is active.
 
-Activation remains blocked on explicit v2 transport negotiation, an atomic transport binding between the coordinator and the selected DOM document, activation-renewal wiring from admitted agent activity, a current Codex-child approval/execution fixture, complete direct-Chrome agent ownership fixtures, and explicit release approval. Current model catalogs MUST continue to report `toolCalls: false`, and tool-bearing Web Responses requests MUST continue to fail closed.
+The official Codex child receives the validated function-call lifecycle, owns any approval and sandbox behavior, executes the local tool, and sends the cumulative continuation. The bridge keeps pending workflow and continuation fingerprints in bounded memory with expiry and consumes a pending call before validating its continuation so a failed or replayed request cannot execute it twice.
+
+The visible capability snapshot still reports `toolCalls: false` for the separate text-turn schema. Agent availability is represented by the authenticated activation snapshot and revision-bound `agent-v2` catalog route, not by widening the v1 capability field.
+
+Automated Chrome coverage uses a synthetic local document and does not sign in, load the packaged extension, contact ChatGPT, or certify the current real-account UI. The project therefore remains an unsigned pre-alpha personal-use MVP even though the v2 source path is active.
 
 ## References
 

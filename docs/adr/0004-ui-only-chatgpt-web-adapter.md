@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-25
-- Implementation: Text-only model discovery and turn streaming implemented; real-account compatibility and tool-call support remain release gates
+- Implementation: This decision's text-only profile is implemented; ADR 0005 separately governs the subsequently implemented bounded tool-capable workflow; real-account compatibility remains a release gate
 
 ## Context
 
@@ -43,7 +43,7 @@ This guard prevents the adapter from appending to a conversation the user was al
 
 Catalog discovery opens the visible model picker only in response to a bridge capability read. The adapter supports both a direct option list and the currently observed nested Model submenu. Each enabled option must expose one normalized accessible label, one semantic path, and an unambiguous selected state.
 
-The extension derives a bounded opaque model ID and catalog revision from normalized semantic UI descriptions using SHA-256. These values contain no account credential or private backend identifier. Each discovered model currently advertises:
+The extension derives a bounded opaque model ID and catalog revision from normalized semantic UI descriptions using SHA-256. These values contain no account credential or private backend identifier. The protocol v1 text profile for each discovered model advertises:
 
 - text input;
 - streaming visible output;
@@ -65,7 +65,7 @@ The provider token remains child-facing. The facade rewrites successful Web life
 
 The local Responses adapter accepts exactly one bounded user text item that protocol v1 can preserve. It rejects multiple messages or content parts, tools, images, non-user roles, instructions, previous-response chaining, persistence requests, structured output, and unknown request semantics instead of joining, discarding, or flattening them. Streaming produces the minimal Responses text lifecycle, respects backpressure and output bounds, and propagates client disconnects as cancellation.
 
-Consequently, this increment enables real UI model discovery, selection, and plain-text turns, but it does not yet provide a complete Codex coding-agent workflow. Normal Codex coding requests in the tested snapshot carry developer instructions and tool definitions that this endpoint rejects. Adding those semantics requires a separate protocol and security decision; prompt-based imitation of tool calls is not accepted.
+At the time of this decision, the increment enabled real UI model discovery, selection, and plain-text turns but did not provide a complete Codex coding-agent workflow. Normal Codex coding requests carried developer instructions and tool definitions that the text endpoint rejected. ADR 0005 now defines and implements those semantics through a separate bounded protocol; prompt-based imitation of tool calls remains prohibited.
 
 ## Consequences
 
@@ -76,7 +76,7 @@ Consequently, this increment enables real UI model discovery, selection, and pla
 - UI changes can temporarily disable the adapter until semantic fixtures are updated.
 - A first Web turn requires the user to connect a fresh ChatGPT conversation surface.
 - Visible prompts and responses may appear in normal ChatGPT history according to the user's settings, even though the bridge adds no conversation persistence.
-- Real-browser and real-account compatibility must be tested manually or in an explicitly authorized fixture. Automated unit coverage currently uses a fake UI driver and pure semantic/state helpers; it does not yet run the DOM driver in a browser DOM-runtime fixture.
+- Real-account compatibility must be tested manually or in an explicitly authorized fixture. Automated coverage now runs the DOM driver against synthetic pages in Chrome Stable, but it does not load the packaged extension into a real profile or contact ChatGPT.
 
 ## Rejected alternatives
 

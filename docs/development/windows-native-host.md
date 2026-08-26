@@ -16,7 +16,7 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm verify
 ```
 
-On Windows, verification builds a Node single-executable Native Host, publishes the self-contained IPC helper, hashes the complete artifact, and runs a bidirectional packaged-relay smoke test. It does not modify HKCU during verification.
+On Windows, verification builds separate Node single-executable facade and Native Host binaries, publishes the self-contained IPC helper, hashes the complete artifact, and runs packaged facade and bidirectional relay smoke tests. The facade smoke verifies the app-server handshake, disconnected catalog, and native `thread/resume` passthrough; the relay smoke verifies the actual Native Host and adjacent helper. Verification does not modify HKCU.
 
 ## Install the development host
 
@@ -36,12 +36,14 @@ These `reg.exe` operations are not an atomic transaction. If setup detects a con
 
 Registry output decoding supports ASCII, UTF-8, and UTF-16LE. If Windows emits a non-ASCII path through an unsupported legacy console code page, setup fails closed instead of guessing the registered path.
 
-The command prints one JSON object. Use its `extensionPath` value when loading the extension:
+The command prints one JSON object. Set the Codex VS Code extension's `chatgpt.cliExecutable` setting to its exact `facadeExecutablePath` value and disable WSL execution for that Windows path. Use its `extensionPath` value when loading the browser extension:
 
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Choose **Load unpacked**.
 4. Select the exact `extensionPath` returned by setup.
+
+Reload VS Code after changing the executable override. The bridge does not modify VS Code settings automatically.
 
 The public development manifest key keeps the unpacked extension ID stable. A future Chrome Web Store build must use a different release identity and a separately signed production installer.
 
@@ -58,7 +60,9 @@ Remove the unpacked extension from Chrome separately. The setup command never cl
 
 ## Current limit
 
-A successful Native Host installation proves only the local Chrome-to-bridge transport boundary. To exercise the Phase 4 adapter manually, open a fresh `https://chatgpt.com/` surface with no transcript, press Connect in the unpacked extension, and refresh the Codex model list. Only `Web · …` models discovered from that selected document are advertised. The observed nested picker currently requires the English accessible submenu name `Model`; localized variants are not certified. The provider accepts only the documented plain-text subset, so normal Codex coding requests carrying developer instructions or tool definitions fail closed. Do not use a real account or submit account/source content during development unless that test is explicitly authorized; automated verification uses synthetic DOM and does not contact ChatGPT.
+A successful Native Host installation proves only the local Chrome-to-bridge transport boundary. To exercise the personal-use MVP manually, open a fresh `https://chatgpt.com/` surface with no transcript, press Connect in the unpacked extension, read and accept the Web Agent disclosure, and activate the 15-minute document-bound lease. Refresh the Codex model list and explicitly choose `Web Agent · …`; the entry disappears when the exact lease, document, session, or catalog binding is no longer current. The text-only `Web · …` route remains separate and rejects normal coding requests that carry richer Codex semantics.
+
+The observed nested picker currently requires the English accessible submenu name `Model`; localized variants are not certified. Automated verification uses synthetic DOM and does not load the packaged extension into a browser profile, sign in to ChatGPT, or certify a real-account coding turn. Any manual personal evaluation sends developer context, source excerpts, tool schemas, arguments, tool output, and final text through the visible ChatGPT conversation and may leave that content in normal account history.
 
 The generated artifact is for local development and is not a redistributable release bundle. Signing, protected installation, release identities, and a complete third-party license inventory remain release gates.
 

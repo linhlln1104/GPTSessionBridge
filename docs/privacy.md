@@ -4,9 +4,9 @@ GPTSessionBridge is designed to keep account sessions in the products that creat
 
 ## Data processed in memory
 
-To perform a supported Web-backed turn, the participating processes may transiently handle bounded prompt text, visible response text, public model selection, catalog revision, and cancellation state. Protocol v1 does not support tool calls. This content is not eligible for routine diagnostics.
+To perform a supported Web-backed turn, the participating processes may transiently handle bounded prompt text, visible response text, public model selection, catalog revision, document and conversation ownership, consent state, and cancellation state. This content is not eligible for routine diagnostics.
 
-Protocol v2 is not active. Its implemented local consent surface discloses that developer instructions, coding requests and user input, selected source excerpts, tool definitions and schemas, tool arguments, and bounded tool output would be rendered through the visible ChatGPT conversation and may therefore enter normal ChatGPT history. None of that content becomes eligible for bridge telemetry or diagnostics.
+For an activated protocol v2 Web Agent turn, the bridge also handles the certified function-tool manifest, round bindings, tool proposals, and the official Codex child's bounded tool output in memory. The consent surface discloses that developer instructions, coding requests and user input, selected source excerpts, tool definitions and schemas, tool arguments, and tool output are rendered through the visible ChatGPT conversation and may therefore enter normal ChatGPT history. None of that content becomes eligible for bridge telemetry or diagnostics.
 
 ## Data not collected by the bridge
 
@@ -18,7 +18,7 @@ The bridge must not collect or persist:
 - browsing history, unrelated tabs, clipboard data, or screenshots;
 - prompts, responses, reasoning, source files, or tool output for telemetry.
 
-The UI adapter does not call undocumented or private ChatGPT backend endpoints. It operates visible controls and text only; it does not derive account or model identity from cookies, tokens, browser storage, or page-internal JavaScript state.
+The UI adapter does not call undocumented or private ChatGPT backend endpoints. It operates visible controls and text only; it does not extract or derive account or model identity from cookies, access tokens, browser storage, or page-internal JavaScript state.
 
 ## Storage and telemetry
 
@@ -26,4 +26,6 @@ The bridge does not add persistent storage for Web route metadata or conversatio
 
 ## User control
 
-The user explicitly chooses which fresh ChatGPT tab to connect and which `Web · …` model to select. Disconnecting the tab or extension ends its availability. The bridge does not open a separate login window, navigate to New chat, submit into an existing transcript, or silently choose another provider when the selected session is unavailable. The unpublished `Web Agent (experimental)` profile requires a separate, expiring document-bound activation gesture; connecting a text-only tab is not consent to share coding context or tool output. The current lease is extension-local and memory-only and does not activate a transport or renew from passive status reads.
+The user explicitly chooses one fresh ChatGPT tab to connect and then selects either its `Web · …` text profile or its activation-gated `Web Agent · …` profile in VS Code. Disconnecting the tab or extension ends its availability. The bridge does not open a separate login window, click New chat, submit into an existing transcript, or silently choose another provider when the selected session is unavailable.
+
+Web Agent use requires a separate disclosure and activation gesture for the exact selected main-frame document. Its memory-only lease expires after 15 minutes without admitted agent activity and is invalidated by document replacement, unrelated navigation, disconnect, extension restart, or explicit deactivation. Passive status reads do not renew it. The adapter may adopt only the initial `/` to `/c/...` transition produced by its own prompt and exact user-message anchor; the user can see the entire resulting conversation and can deactivate or disconnect at any time.
