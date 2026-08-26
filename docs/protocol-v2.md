@@ -1,6 +1,6 @@
 # Tool-Capable Web Workflow Protocol v2
 
-- Status: Experimental design; runtime disabled
+- Status: Experimental; inactive boundaries implemented, runtime and catalog disabled
 - Version: 2
 - Decision: [ADR 0005](adr/0005-tool-capable-web-protocol-v2.md)
 
@@ -89,7 +89,7 @@ Each tool schema MUST:
 - fit the manifest limits in section 10; and
 - match the schema digest certified for the selected profile.
 
-The manifest is canonicalized using the restricted RFC 8785 profile below and hashed with SHA-256. Its visible value has the form `sha256-` followed by the canonical unpadded base64url encoding of exactly 32 digest bytes. A decoder MUST reject non-zero padding bits or any decode/re-encode mismatch. Any tool, ordering, description, or schema change produces a different digest and invalidates the active workflow.
+The manifest is the exact closed object `{ "parallelToolCalls": false, "profileVersion": string, "tools": [...] }`. It is canonicalized using the restricted RFC 8785 profile below and hashed with SHA-256. Its visible value has the form `sha256-` followed by the canonical unpadded base64url encoding of exactly 32 digest bytes. A decoder MUST reject non-zero padding bits or any decode/re-encode mismatch. Any parallel-call policy, profile version, tool, ordering, description, or schema change produces a different digest and invalidates the active workflow.
 
 #### Canonical JSON profile
 
@@ -389,7 +389,9 @@ Passing a codec unit test or adding a v2 source module is insufficient to advert
 
 ## 15. Current status
 
-The protocol v2 design is accepted, but its runtime path, coordinator, request adapter, activation UI, child integration fixture, and capability negotiation are not active. Current model catalogs MUST continue to report `toolCalls: false`, and tool-bearing Web Responses requests MUST continue to fail closed.
+The repository implements the strict Responses request/lifecycle boundary, certified-schema evaluator, in-memory agent-session coordinator, typed one-shot adapter, and extension-local activation/consent lease. They are deliberately isolated from the active HTTP, Native Messaging, page-message, DOM-agent, and model-catalog paths.
+
+Activation remains blocked on explicit v2 transport negotiation, an atomic transport binding between the coordinator and the selected DOM document, activation-renewal wiring from admitted agent activity, a current Codex-child approval/execution fixture, complete direct-Chrome agent ownership fixtures, and explicit release approval. Current model catalogs MUST continue to report `toolCalls: false`, and tool-bearing Web Responses requests MUST continue to fail closed.
 
 ## References
 

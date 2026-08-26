@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-26
-- Implementation: Design accepted; the v2 runtime is not activated or advertised, and protocol v1 continues to report `toolCalls: false`
+- Implementation: Inactive request/lifecycle, coordinator, one-shot adapter, and local consent boundaries are implemented; transport negotiation and catalog publication remain disabled, and protocol v1 continues to report `toolCalls: false`
 
 ## Context
 
@@ -67,6 +67,8 @@ The continuation request must preserve the canonical initial prefix and manifest
 The bridge records a tool-call commit before emitting the first function-call event to the child. A committed call is never emitted a second time, even after client disconnect or ambiguous completion. Prompts, tool calls, and provider requests are never replayed automatically.
 
 ### Activation remains a release gate
+
+The repository contains an inactive strict Responses request/lifecycle boundary, an in-memory agent-session coordinator, a typed one-shot adapter between them, and an extension-local document-bound consent lease. These components have no v2 listener or Native Messaging/page transport route and do not publish a Web Agent model. Their presence satisfies implementation prerequisites; it does not constitute capability negotiation or release approval.
 
 The experimental model may advertise tool capability only after all of the following are present and passing on every supported release platform:
 

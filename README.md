@@ -3,7 +3,7 @@
 GPTSessionBridge is a local bridge that lets a Codex client route an explicitly selected thread to a ChatGPT Web model while the user's ChatGPT session remains inside their existing browser.
 
 > [!WARNING]
-> This project is pre-alpha and not production-ready. The UI-only ChatGPT adapter and local Responses integration are implemented for bounded plain-text turns on an explicitly selected fresh chat. The package is unsigned, real-account compatibility is not certified, and normal Codex coding requests that carry developer instructions or tool definitions remain unsupported and fail closed. Protocol v2 design and parser groundwork do not activate tool execution.
+> This project is pre-alpha and not production-ready. The UI-only ChatGPT adapter and local Responses integration are implemented for bounded plain-text turns on an explicitly selected fresh chat. The package is unsigned, real-account compatibility is not certified, and normal Codex coding requests that carry developer instructions or tool definitions remain unsupported and fail closed. Protocol v2 boundaries and local consent UI are present for testing, but no v2 transport or Web Agent model is active.
 
 ## Design goals
 
@@ -50,7 +50,8 @@ The facade launches the official Codex app-server, preserves the JSON meaning of
 - A Native Messaging runtime that opens bridge IPC only after validating the exact extension origin and completing the extension-side handshake.
 - A Manifest V3 extension that connects only an explicitly selected `https://chatgpt.com` tab using `activeTab`, `scripting`, and `nativeMessaging`; its isolated content adapter reads semantic visible UI, discovers the model picker, verifies selection, submits bounded text, streams visible assistant text, and requests no cookie, debugger, storage, history, or broad host access.
 - A direct Chrome Stable DOM-runtime fixture that exercises the production UI driver against a synthetic local document, including nested model selection, raw-picker drift, real DOM events and observers, visible-text filtering, streaming, and cancellation.
-- A standalone protocol v2 visible-envelope schema and fail-closed codec with adversarial parser tests. It is design groundwork only and is not connected to the Responses, Native Messaging, catalog, or execution runtime.
+- Inactive protocol v2 boundaries: strict request/continuation admission and Responses lifecycle mapping, a certified closed-schema evaluator, an in-memory `AgentSessionCoordinator`, and a typed one-shot adapter with replay and at-most-once guards.
+- A memory-only extension activation/consent UI bound to the exact selected tab and document. It expires after 15 minutes of inactivity and is invalidated by navigation, document replacement, disconnect, extension restart, or explicit deactivation.
 - A Windows x64 development package containing a pinned Node 24 single-executable Native Host, its adjacent self-contained IPC helper, the unpacked MV3 extension, and a strict content-hash manifest.
 - Conservative per-user `install`, `status`, and `uninstall` commands using the development-only `com.gptsessionbridge.native_host.dev` HKCU identity. Setup reconciles both Chrome registry views in precedence-aware order, refuses foreign ownership, and never edits a Chrome profile.
 
@@ -58,6 +59,7 @@ The facade launches the official Codex app-server, preserves the JSON meaning of
 
 - Runtime support for Codex developer instructions, tool definitions or calls, images, structured output, previous-response chaining, or other Responses semantics that cannot be preserved by protocol v1.
 - A complete coding-agent workflow through ChatGPT Web. The adapter never imitates tool calls by parsing prose.
+- Protocol v2 Native Messaging/page capability negotiation, coordinator-to-DOM agent transport, admitted-activity lease renewal wiring, current Codex-child approval/execution fixtures, and a published `Web Agent (experimental)` catalog entry.
 - A signed production installer, protected per-machine installation, reserved Chrome Web Store identity, or code signing.
 - A redistributable release bundle with a completed third-party license inventory.
 - Packaged-MV3/native-host Chrome E2E or real-account compatibility certification. The direct Chrome DOM-runtime gate uses a synthetic local document, does not load the extension package, and never visits ChatGPT.
@@ -120,7 +122,7 @@ corepack pnpm native-host:status
 corepack pnpm native-host:uninstall
 ```
 
-`smoke:app-server` builds the workspace, launches the facade against the installed Codex CLI, and verifies the app-server handshake plus an empty fail-closed Web catalog when no tab is connected. On Windows x64, `package:windows` also launches the packaged SEA executable against the packaged IPC helper from an empty temporary working directory and verifies a bidirectional Native Messaging relay without changing the registry. Windows CI separately opts into an install/status/uninstall round trip across both registry views under the isolated `.dev` HKCU key and refuses any pre-existing value. Automated tests cover dynamic model projection, exact revision routes, Responses streaming and rejection behavior, protocol v2 envelope parsing, real Chrome DOM behavior on a synthetic page, Windows IPC, coordinator lifecycle, setup ownership, and MV3 output policy. They do not visit ChatGPT, submit a prompt to ChatGPT Web, or use a real account.
+`smoke:app-server` builds the workspace, launches the facade against the installed Codex CLI, and verifies the app-server handshake plus an empty fail-closed Web catalog when no tab is connected. On Windows x64, `package:windows` also launches the packaged SEA executable against the packaged IPC helper from an empty temporary working directory and verifies a bidirectional Native Messaging relay without changing the registry. Windows CI separately opts into an install/status/uninstall round trip across both registry views under the isolated `.dev` HKCU key and refuses any pre-existing value. Automated tests cover dynamic model projection, exact revision routes, Responses streaming and rejection behavior, protocol v2 envelope/request/continuation parsing, one-shot coordinator integration, activation expiry and SPA-navigation invalidation, real Chrome DOM behavior on synthetic pages, Windows IPC, coordinator lifecycle, setup ownership, and MV3 output policy. They do not visit ChatGPT, submit a prompt to ChatGPT Web, or use a real account.
 
 See [Windows development setup](docs/development/windows-native-host.md) before registering the development host or loading the unpacked extension.
 
@@ -128,9 +130,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
 
 ## Project status
 
-Phase 2 establishes a runnable app-server facade, model-catalog augmentation, fail-closed thread routing, an authenticated local provider boundary, and versioned protocols. Phase 3 adds the authenticated Windows/Native Messaging transport, `BrowserSessionCoordinator`, explicit-tab MV3 shell, and verified development package. Phase 4 adds a UI-only ChatGPT DOM adapter, dynamic Web model catalog, revision-bound provider routes, strict text-only Responses streaming, and a direct synthetic Chrome DOM gate. The current protocol v2 increment records the activation-gated tool-workflow design and implements only its isolated envelope codec. Tool-capable runtime activation, production signing, and real-account certification remain deliberately excluded.
+Phase 2 establishes a runnable app-server facade, model-catalog augmentation, fail-closed thread routing, an authenticated local provider boundary, and versioned protocols. Phase 3 adds the authenticated Windows/Native Messaging transport, `BrowserSessionCoordinator`, explicit-tab MV3 shell, and verified development package. Phase 4 adds a UI-only ChatGPT DOM adapter, dynamic Web model catalog, revision-bound provider routes, strict text-only Responses streaming, and a direct synthetic Chrome DOM gate. The current protocol v2 increment implements inactive request/lifecycle, schema, agent-session, one-shot integration, and document-bound consent boundaries. Tool-capable transport activation, model publication, production signing, and real-account certification remain deliberately excluded.
 
-The current compatibility snapshot was tested on 2026-08-26 with Codex CLI `0.149.0-alpha.4.3`, Node.js `24.18.1`, Chrome Stable `151.0.7922.174`, and Windows x64. See [Compatibility](docs/compatibility.md) for the exact scope and limitations.
+The current compatibility snapshot was tested on 2026-08-26 with Codex CLI `0.150.0-alpha.8`, Node.js `24.18.1`, Chrome Stable `151.0.7922.174`, and Windows x64. See [Compatibility](docs/compatibility.md) for the exact scope and limitations.
 
 GPTSessionBridge is an independent project. It is not affiliated with or endorsed by OpenAI. ChatGPT and Codex are trademarks of their respective owner.
 

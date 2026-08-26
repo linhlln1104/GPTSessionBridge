@@ -20,13 +20,13 @@ No production compatibility is declared during pre-alpha development.
 
 The following development snapshot was tested on 2026-08-26:
 
-| Component        | Tested value        | Scope                                                               |
-| ---------------- | ------------------- | ------------------------------------------------------------------- |
-| Operating system | Windows x64         | Facade, Responses provider, pipe helper, SEA package, and setup CLI |
-| Codex CLI        | `0.149.0-alpha.4.3` | Official `codex app-server` child                                   |
-| Node.js          | `24.18.1`           | Workspace build, tests, facade, and smoke test                      |
-| Google Chrome    | `151.0.7922.174`    | Direct production-driver DOM runtime against a synthetic local page |
-| .NET SDK         | `10.0.301`          | Helper build, tests, formatting, audit, and single-file publish     |
+| Component        | Tested value      | Scope                                                               |
+| ---------------- | ----------------- | ------------------------------------------------------------------- |
+| Operating system | Windows x64       | Facade, Responses provider, pipe helper, SEA package, and setup CLI |
+| Codex CLI        | `0.150.0-alpha.8` | Official `codex app-server` child                                   |
+| Node.js          | `24.18.1`         | Workspace build, tests, facade, and smoke test                      |
+| Google Chrome    | `151.0.7922.174`  | Direct production-driver DOM runtime against a synthetic local page |
+| .NET SDK         | `10.0.301`        | Helper build, tests, formatting, audit, and single-file publish     |
 
 Verified behavior in this snapshot:
 
@@ -37,7 +37,7 @@ Verified behavior in this snapshot:
 - Windows integration tests verify one-instance pipe ownership, a logon-session DACL, remote-client rejection, mutual peer identity checks, bounded accept lifetime, and full-duplex framed relay.
 - Synthetic tests verify the Native Messaging framing, strict origin policy, per-link handshake and sequence rules, direction-aware relay, coordinator correlation/lifecycle, bounded queues, and write backpressure.
 - MV3 tests and build gates verify exact active-document selection, disconnect race handling, a strict sequenced browser-safe protocol, adapter catalog/turn guards through a fake UI driver and pure semantic/state fixtures, a self-contained classic content bundle, and the absence of dynamic-code constructs in extension output. A separate Chrome Stable compatibility gate preflights and reports the browser version, requires major version 151 or newer, then runs the production DOM driver on a synthetic local document and exercises nested picker discovery/selection, final raw-picker drift, `InputEvent`, `MutationObserver`, visible-text filtering, streaming completion, and verified Stop cancellation.
-- Protocol package tests exercise the isolated v2 whole-response envelope codec, including exact markers, closed schemas, duplicate JSON keys, malformed or extra content, depth/node/byte limits, and marker text inside serialized tool output. The codec is not connected to runtime routing or execution.
+- Protocol and bridge tests exercise the isolated v2 whole-response envelope codec, strict request and continuation admission, certified closed-schema evaluation, canonical manifest binding, one-shot coordinator integration, replay rejection, bounded rounds, and at-most-once commit. Extension fixtures cover consent, expiry, selected-document binding, and SPA-navigation invalidation. These boundaries are not connected to active runtime routing, DOM-agent transport, model publication, approval, or execution.
 - Windows packaging verifies a clean Node 24 SEA Native Host, adjacent self-contained helper, exact development manifest identity, complete artifact hashes, absence of the local repository path, and a bidirectional packaged-relay smoke with empty child environments.
 - Setup tests cover bounded package traversal, links, case collisions, changed files, dual-view shadowing and shared-view convergence, ownership conflicts, detected read/write races, retained ambiguous state, status, and conservative unregister behavior without changing the machine registry.
 - The opt-in Windows CI smoke verifies initially empty 32-bit and 64-bit HKCU development keys through install, status, and uninstall; it refuses to replace any pre-existing registration.
@@ -62,7 +62,7 @@ This matrix does not claim an end-to-end IDE coding flow, macOS, Linux, a packag
 - Native protocol v1 supports user text and visible output text only. It advertises no image, temporary-chat, or tool-call capability; the Responses adapter rejects richer semantics rather than stripping or reinterpreting them.
 - The nested model-picker path currently recognizes the English accessible submenu name `Model`. Localized ChatGPT picker variants have not been certified and remain unavailable when their semantics cannot be matched unambiguously.
 - Disconnect teardown can only make a best-effort click on a currently visible, verified Stop control. If the selected document or transport is already gone, or the control has not appeared, the bridge cannot confirm that ChatGPT stopped generating; inspect the selected tab because generation and Web usage may continue.
-- Normal Codex coding requests in the tested snapshot carry developer instructions and tool definitions and therefore fail closed. Protocol v2 has an accepted activation-gated design and an isolated envelope codec, but no Web Agent catalog entry, Responses v2 adapter, continuation validator, execution loop, or compatibility claim.
+- Normal Codex coding requests in the tested snapshot carry developer instructions and tool definitions and therefore fail closed on the active v1 route. Protocol v2 now has inactive strict request/continuation, schema, coordinator, one-shot adapter, and local consent boundaries, but no v2 transport negotiation, coordinator-to-DOM agent path, current child execution fixture, Web Agent catalog entry, or compatibility claim.
 
 ## Browser UI changes
 
