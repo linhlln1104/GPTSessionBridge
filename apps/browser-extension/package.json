@@ -11,6 +11,7 @@
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json && vite build --config vite.config.ts && node scripts/build-content.mjs && node scripts/copy-static.mjs && pnpm run verify:output",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:dom-runtime": "node scripts/check-chrome-stable.mjs && vitest run --config vitest.browser.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify:output": "node scripts/verify-output.mjs"
   },
@@ -20,7 +21,9 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@vitest/browser-playwright": "catalog:",
     "@vitest/coverage-v8": "catalog:",
+    "playwright": "catalog:",
     "typescript": "catalog:",
     "vite": "8.2.2",
     "vitest": "catalog:"

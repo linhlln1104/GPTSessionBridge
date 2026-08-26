@@ -25,10 +25,11 @@
     "smoke:app-server": "pnpm build && node scripts/smoke-app-server.mjs",
     "smoke:windows-setup": "node scripts/smoke-windows-setup.mjs",
     "test": "pnpm build:workspace-deps && pnpm --recursive --if-present test && pnpm test:windows-ipc",
+    "test:chrome-dom": "pnpm --filter @gpt-session-bridge/browser-extension test:dom-runtime",
     "test:coverage": "pnpm build:workspace-deps && pnpm --recursive --if-present test:coverage && pnpm test:windows-ipc",
     "test:windows-ipc": "node scripts/test-windows-ipc.mjs",
     "typecheck": "pnpm build:workspace-deps && tsc --noEmit -p tsconfig.json && pnpm --recursive --if-present typecheck",
-    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm build && pnpm package:windows:from-build:if-supported && pnpm verify:windows-package:if-supported",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm test:chrome-dom && pnpm build && pnpm package:windows:from-build:if-supported && pnpm verify:windows-package:if-supported",
     "verify:windows-package": "node scripts/verify-windows-package.mjs",
     "verify:windows-package:if-supported": "node scripts/verify-windows-package.mjs --if-supported"
   },
