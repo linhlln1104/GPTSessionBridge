@@ -63,6 +63,11 @@ export interface PageCatalogChangedMessage extends PageEnvelope {
   readonly type: "page/catalog/changed";
 }
 
+/** Content-free signal that the selected SPA navigation surface changed. */
+export interface PageDocumentChangedMessage extends PageEnvelope {
+  readonly type: "page/document/changed";
+}
+
 export interface PageTurnStartedMessage extends PageEnvelope {
   readonly requestId: string;
   readonly turnId: string;
@@ -107,6 +112,7 @@ export type PageEventMessage =
   | PageCatalogChangedMessage
   | PageCatalogResultMessage
   | PageCommandFailedMessage
+  | PageDocumentChangedMessage
   | PageReadyMessage
   | PageTurnCancelledMessage
   | PageTurnCompletedMessage
@@ -286,6 +292,7 @@ export type PageRuntimeEventInput =
   | Omit<PageCatalogChangedMessage, keyof PageEnvelope>
   | Omit<PageCatalogResultMessage, keyof PageEnvelope>
   | Omit<PageCommandFailedMessage, keyof PageEnvelope>
+  | Omit<PageDocumentChangedMessage, keyof PageEnvelope>
   | Omit<PageTurnCancelledMessage, keyof PageEnvelope>
   | Omit<PageTurnCompletedMessage, keyof PageEnvelope>
   | Omit<PageTurnDeltaMessage, keyof PageEnvelope>
@@ -341,6 +348,10 @@ export function parsePageEvent(value: unknown): PageEventMessage | undefined {
       return isCatalogResult(value) ? (value as unknown as PageCatalogResultMessage) : undefined;
     case "page/catalog/changed":
       return isCatalogChanged(value) ? (value as unknown as PageCatalogChangedMessage) : undefined;
+    case "page/document/changed":
+      return hasExactKeys(value, ["protocolVersion", "sequence", "type"])
+        ? (value as unknown as PageDocumentChangedMessage)
+        : undefined;
     case "page/turn/started":
       return hasExactKeys(value, ["protocolVersion", "requestId", "sequence", "turnId", "type"]) &&
         isOpaqueId(value["requestId"], 128) &&

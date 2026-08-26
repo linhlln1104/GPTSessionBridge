@@ -1,4 +1,5 @@
 import { BrowserChatGptUiDriver } from "./browser-chatgpt-ui-driver.js";
+import { observeDocumentNavigation } from "./document-navigation-monitor.js";
 import {
   ChatGptDomAdapter,
   ChatGptDomAdapterError,
@@ -75,6 +76,7 @@ class ContentRuntime {
   readonly #link = new PageServerLink();
   readonly #port: ContentPort;
   readonly #stopCatalogObservation: () => void;
+  readonly #stopNavigationObservation: () => void;
   #active:
     | {
         readonly requestId: string;
@@ -87,6 +89,20 @@ class ContentRuntime {
 
   public constructor(port: ContentPort) {
     this.#port = port;
+    this.#stopNavigationObservation = observeDocumentNavigation({
+      document,
+      onChanged: () => {
+        if (this.#closed) {
+          return;
+        }
+        if (!this.#ready) {
+          this.close();
+          return;
+        }
+        this.#send({ type: "page/document/changed" });
+      },
+      window,
+    });
     this.#stopCatalogObservation = this.#adapter.onCatalogChanged((catalog) => {
       if (!this.#closed && this.#ready) {
         this.#send({
@@ -131,6 +147,7 @@ class ContentRuntime {
     this.#cancelRequestId = undefined;
     this.#ready = false;
     this.#stopCatalogObservation();
+    this.#stopNavigationObservation();
     this.#adapter.dispose();
     this.#link.close();
     try {

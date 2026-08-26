@@ -12,11 +12,13 @@ const DOCUMENT_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 export interface SelectedDocument {
   readonly documentId: string;
   readonly tabId: number;
+  readonly url: string;
   readonly windowId: number;
 }
 
 export interface SelectedTab {
   readonly tabId: number;
+  readonly url: string;
   readonly windowId: number;
 }
 
@@ -84,7 +86,7 @@ export function selectActiveChatGptTab(tabs: readonly ChromeTab[]): SelectedTab 
   ) {
     return undefined;
   }
-  return Object.freeze({ tabId, windowId });
+  return Object.freeze({ tabId, url: tab.url, windowId });
 }
 
 function isNonnegativeSafeInteger(value: unknown): value is number {

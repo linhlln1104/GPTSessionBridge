@@ -9,15 +9,52 @@
   <body>
     <main>
       <h1>GPTSessionBridge</h1>
-      <p id="status" role="status" aria-live="polite">Reading connection status…</p>
-      <p class="hint">
-        Connect only from a fresh chatgpt.com home page. The bridge will keep using that
-        conversation.
-      </p>
-      <div class="actions">
-        <button id="connect" type="button">Connect this tab</button>
-        <button id="disconnect" type="button">Disconnect</button>
-      </div>
+      <section aria-labelledby="connection-heading">
+        <h2 id="connection-heading">ChatGPT tab</h2>
+        <p id="status" role="status" aria-live="polite">Reading connection status…</p>
+        <p class="hint">
+          Connect only from a fresh chatgpt.com home page. The bridge will keep using that
+          conversation.
+        </p>
+        <div class="actions">
+          <button id="connect" type="button">Connect this tab</button>
+          <button id="disconnect" type="button">Disconnect</button>
+        </div>
+      </section>
+
+      <fieldset>
+        <legend>Tool-capable Web Agent</legend>
+        <p id="tool-status" role="status" aria-live="polite">Reading tool access status…</p>
+        <p id="tool-availability" class="hint">
+          This lease records consent only. The Web Agent model remains unavailable in this build.
+        </p>
+        <div id="tool-disclosure" class="disclosure">
+          <p>Activating this experimental mode allows GPTSessionBridge to write:</p>
+          <ul>
+            <li>your coding request, developer context, and source excerpts;</li>
+            <li>tool names, definitions, and input schemas;</li>
+            <li>tool arguments; and</li>
+            <li>tool results.</li>
+          </ul>
+          <p>
+            This data is written into the visible ChatGPT conversation and may be retained according
+            to your ChatGPT account and history settings. Developer-role priority is not preserved
+            in the Web composer.
+          </p>
+        </div>
+        <label class="consent">
+          <input
+            id="tool-consent"
+            type="checkbox"
+            aria-describedby="tool-disclosure tool-availability tool-status"
+          />
+          I understand and want to activate tool access for this selected tab.
+        </label>
+        <div class="actions">
+          <button id="activate-tools" type="button" disabled>Activate tool access</button>
+          <button id="deactivate-tools" type="button" disabled>Deactivate</button>
+        </div>
+      </fieldset>
     </main>
     <script type="module" src="./popup.js"></script>
   </body>

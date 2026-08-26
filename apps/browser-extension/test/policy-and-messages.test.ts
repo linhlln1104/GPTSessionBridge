@@ -53,10 +53,15 @@ describe("extension boundary policies", () => {
     const tabs = [
       { active: true, id: 7, url: "https://chatgpt.com/c/example", windowId: 4 },
     ] as const;
-    expect(selectActiveChatGptTab(tabs)).toEqual({ tabId: 7, windowId: 4 });
+    expect(selectActiveChatGptTab(tabs)).toEqual({
+      tabId: 7,
+      url: "https://chatgpt.com/c/example",
+      windowId: 4,
+    });
     expect(selectInjectedDocument(tabs, [{ documentId: "document-1", frameId: 0 }])).toEqual({
       documentId: "document-1",
       tabId: 7,
+      url: "https://chatgpt.com/c/example",
       windowId: 4,
     });
 
@@ -81,17 +86,61 @@ describe("extension boundary policies", () => {
 describe("internal extension messages", () => {
   it("uses strict popup request and response variants", () => {
     expect(parseUiRequest({ type: "ui/connect" })).toEqual({ type: "ui/connect" });
+    expect(
+      parseUiRequest({
+        disclosureVersion: "visible-chat-data-v1",
+        selectionRevision: 4,
+        type: "ui/tool-activation/activate",
+      }),
+    ).toEqual({
+      disclosureVersion: "visible-chat-data-v1",
+      selectionRevision: 4,
+      type: "ui/tool-activation/activate",
+    });
+    expect(parseUiRequest({ type: "ui/tool-activation/deactivate" })).toEqual({
+      type: "ui/tool-activation/deactivate",
+    });
+    expect(parseUiRequest({ type: "ui/tool-activation/activate" })).toBeUndefined();
     expect(parseUiRequest({ extra: true, type: "ui/connect" })).toBeUndefined();
     expect(parseUiRequest({ type: "ui/unknown" })).toBeUndefined();
 
-    expect(parseUiResponse({ ok: true, status: { reason: "none", state: "connected" } })).toEqual({
+    expect(
+      parseUiResponse({
+        activation: inactiveUiActivation(),
+        ok: true,
+        selectionRevision: 4,
+        status: { reason: "none", state: "connected" },
+      }),
+    ).toEqual({
+      activation: inactiveUiActivation(),
       ok: true,
+      selectionRevision: 4,
       status: { reason: "none", state: "connected" },
     });
     expect(
-      parseUiResponse({ ok: true, status: { reason: "none", state: "selected" } }),
+      parseUiResponse({
+        activation: inactiveUiActivation(),
+        ok: true,
+        selectionRevision: 4,
+        status: { reason: "none", state: "selected" },
+      }),
     ).toBeUndefined();
-    expect(parseUiResponse({ ok: true, status: { reason: "none" } })).toBeUndefined();
+    expect(
+      parseUiResponse({
+        activation: { ...inactiveUiActivation(), documentId: "private" },
+        ok: true,
+        selectionRevision: 4,
+        status: { reason: "none", state: "connected" },
+      }),
+    ).toBeUndefined();
+    expect(
+      parseUiResponse({
+        activation: inactiveUiActivation(),
+        ok: true,
+        selectionRevision: 4,
+        status: { reason: "none" },
+      }),
+    ).toBeUndefined();
   });
 
   it("uses a strict fail-closed page probe", () => {
@@ -113,6 +162,17 @@ describe("internal extension messages", () => {
       sequence: 0,
       type: "page/ready",
     });
+    expect(
+      parsePageEvent({ protocolVersion: 1, sequence: 1, type: "page/document/changed" }),
+    ).toEqual({ protocolVersion: 1, sequence: 1, type: "page/document/changed" });
+    expect(
+      parsePageEvent({
+        pathname: "/c/private",
+        protocolVersion: 1,
+        sequence: 1,
+        type: "page/document/changed",
+      }),
+    ).toBeUndefined();
     expect(
       parsePageReadyMessage({
         adapter: "unavailable",
@@ -168,5 +228,16 @@ function pageModel(): WebModelDescriptor {
         reasoningEffort: "medium",
       },
     ],
+  };
+}
+
+function inactiveUiActivation(): Readonly<Record<string, unknown>> {
+  return {
+    disclosureVersion: "visible-chat-data-v1",
+    expiresAtMs: null,
+    inactivityTimeoutMs: 900_000,
+    reason: "extension_restart",
+    revision: 0,
+    state: "inactive",
   };
 }

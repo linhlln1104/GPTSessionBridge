@@ -49,6 +49,11 @@ describe("BrowserTabSession", () => {
 
     harness.nativePort.emitMessage(helloAcknowledgedFrame());
     expect(session.status).toEqual({ reason: "none", state: "connected" });
+    expect(session.activationBinding).toEqual({
+      documentId: "document-1",
+      generation: 1,
+      tabId: 7,
+    });
 
     harness.nativePort.emitMessage(
       applicationFrame(1, "session/connect", { sessionId: "session-1" }),
@@ -229,6 +234,7 @@ describe("BrowserTabSession", () => {
       type: "session/disconnected",
       payload: { reason: "shutdown", sessionId: "session-1" },
     });
+    expect(harness.documentInvalidations).toEqual(["disconnected"]);
     harness.nativePort.emitMessage(
       applicationFrame(4, "session/connect", { sessionId: "session-2" }),
     );
@@ -482,6 +488,8 @@ describe("BrowserTabSession", () => {
     expect(harness.nativePort.disconnected).toBe(true);
     expect(harness.pagePort.disconnected).toBe(true);
     expect(session.status).toEqual({ reason: "none", state: "idle" });
+    expect(session.activationBinding).toBeUndefined();
+    expect(harness.documentInvalidations).toEqual(["disconnected"]);
   });
 
   it("fails closed on native sequence violations", async () => {
@@ -504,6 +512,7 @@ describe("BrowserTabSession", () => {
     pageHarness.pagePort.onDisconnect.emit();
     expect(pageSession.status).toEqual({ reason: "page_unavailable", state: "error" });
     expect(pageHarness.nativePort.disconnected).toBe(true);
+    expect(pageHarness.documentInvalidations).toEqual(["document_replaced"]);
 
     const nativeHarness = new ChromeHarness();
     const nativeSession = nativeHarness.createSession();
@@ -511,6 +520,25 @@ describe("BrowserTabSession", () => {
     nativeHarness.nativePort.onDisconnect.emit();
     expect(nativeSession.status).toEqual({ reason: "native_unavailable", state: "error" });
     expect(nativeHarness.pagePort.disconnected).toBe(true);
+    expect(nativeHarness.documentInvalidations).toEqual(["disconnected"]);
+  });
+
+  it("invalidates the selected document on a same-document SPA navigation signal", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+
+    harness.pagePort.emitMessage({
+      protocolVersion: 1,
+      sequence: 1,
+      type: "page/document/changed",
+    });
+
+    expect(session.status).toEqual({ reason: "page_unavailable", state: "error" });
+    expect(session.activationBinding).toBeUndefined();
+    expect(harness.pagePort.disconnected).toBe(true);
+    expect(harness.nativePort.disconnected).toBe(true);
+    expect(harness.documentInvalidations).toEqual(["document_replaced"]);
   });
 
   it("does not resurrect a connection cancelled while the active-tab query is pending", async () => {
@@ -620,6 +648,7 @@ class FakePort implements ChromePort {
 }
 
 class ChromeHarness {
+  public readonly documentInvalidations: ("disconnected" | "document_replaced")[] = [];
   public injectionGate: Promise<void> = Promise.resolve();
   public injection:
     | {
@@ -698,6 +727,9 @@ class ChromeHarness {
           throw new Error("The test request id pool is exhausted.");
         }
         return requestId;
+      },
+      onDocumentInvalidated: (reason) => {
+        this.documentInvalidations.push(reason);
       },
     });
   }

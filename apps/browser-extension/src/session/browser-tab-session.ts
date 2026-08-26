@@ -20,6 +20,7 @@ import {
   type PageEventMessage,
   type PageRuntimeCommandInput,
 } from "../protocol/page-messages.js";
+import type { ToolActivationDocumentBinding } from "../protocol/tool-activation.js";
 import type { ExtensionUiReason, UiStatus } from "../protocol/ui-messages.js";
 import {
   selectActiveChatGptTab,
@@ -51,6 +52,7 @@ interface ActiveTurn {
 export interface BrowserTabSessionOptions {
   readonly chrome: ChromeApi;
   readonly createRequestId: () => string;
+  readonly onDocumentInvalidated?: (reason: "disconnected" | "document_replaced") => void;
 }
 
 const MAIN_FRAME_ID = 0;
@@ -74,6 +76,8 @@ const BRIDGE_ERROR_CODES = Object.freeze({
 export class BrowserTabSession {
   readonly #chrome: ChromeApi;
   readonly #createRequestId: () => string;
+  readonly #onDocumentInvalidated:
+    ((reason: "disconnected" | "document_replaced") => void) | undefined;
   #generation = 0;
   #native: ActiveNativeConnection | undefined;
   readonly #orphanedCatalogRequestIds = new Set<string>();
@@ -87,10 +91,69 @@ export class BrowserTabSession {
   public constructor(options: BrowserTabSessionOptions) {
     this.#chrome = options.chrome;
     this.#createRequestId = options.createRequestId;
+    this.#onDocumentInvalidated = options.onDocumentInvalidated;
   }
 
   public get status(): UiStatus {
     return this.#status;
+  }
+
+  /** Redacted epoch used only to bind popup consent to the selected connection. */
+  public get selectionRevision(): number {
+    return this.#generation;
+  }
+
+  public get activationBinding(): ToolActivationDocumentBinding | undefined {
+    const page = this.#page;
+    if (this.#status.state !== "connected" || page?.link.state !== "ready") {
+      return undefined;
+    }
+    return Object.freeze({
+      documentId: page.selected.documentId,
+      generation: page.generation,
+      tabId: page.selected.tabId,
+    });
+  }
+
+  /**
+   * Revalidates the explicit popup gesture against Chrome's current active tab
+   * and an unchanged connected document. No lease is created or renewed here.
+   */
+  public async readActivationBindingForActiveTab(
+    expectedSelectionRevision: number,
+  ): Promise<ToolActivationDocumentBinding | undefined> {
+    const beforePage = this.#page;
+    const beforeBinding = this.activationBinding;
+    if (
+      beforePage === undefined ||
+      beforeBinding === undefined ||
+      expectedSelectionRevision !== this.#generation
+    ) {
+      return undefined;
+    }
+
+    let tabs;
+    try {
+      tabs = await this.#chrome.tabs.query({ active: true, currentWindow: true });
+    } catch {
+      return undefined;
+    }
+    const active = selectActiveChatGptTab(tabs);
+    const afterPage = this.#page;
+    const afterBinding = this.activationBinding;
+    if (
+      active === undefined ||
+      afterPage !== beforePage ||
+      afterBinding === undefined ||
+      expectedSelectionRevision !== this.#generation ||
+      active.tabId !== beforePage.selected.tabId ||
+      active.windowId !== beforePage.selected.windowId ||
+      active.url !== beforePage.selected.url ||
+      !sameActivationBinding(beforeBinding, afterBinding)
+    ) {
+      return undefined;
+    }
+    return afterBinding;
   }
 
   public async connect(): Promise<boolean> {
@@ -256,6 +319,7 @@ export class BrowserTabSession {
         this.#sessionId = undefined;
         this.#pendingCatalogRequestId = undefined;
         this.#turn = undefined;
+        this.#notifyDocumentInvalidated("disconnected");
         return this.#applicationFrame("session/disconnected", frame.requestId, {
           reason: frame.payload.reason ?? "shutdown",
           sessionId: frame.payload.sessionId,
@@ -379,6 +443,10 @@ export class BrowserTabSession {
   }
 
   #handlePageEvent(event: Exclude<PageEventMessage, { readonly type: "page/ready" }>): void {
+    if (event.type === "page/document/changed") {
+      this.#terminate("pageUnavailable", "error", "page_unavailable");
+      return;
+    }
     if (this.#drainOrphanedPageEvent(event)) {
       return;
     }
@@ -727,6 +795,12 @@ export class BrowserTabSession {
     this.#sessionId = undefined;
     this.#turn = undefined;
 
+    if (page !== undefined) {
+      this.#notifyDocumentInvalidated(
+        closeReason === "pageUnavailable" ? "document_replaced" : "disconnected",
+      );
+    }
+
     if (closeReason !== undefined && sessionId !== undefined && native?.link.state === "ready") {
       try {
         const frame = this.#applicationFrame("session/disconnected", this.#createRequestId(), {
@@ -749,6 +823,25 @@ export class BrowserTabSession {
   #setStatus(state: UiStatus["state"], reason: ExtensionUiReason): void {
     this.#status = Object.freeze({ reason, state });
   }
+
+  #notifyDocumentInvalidated(reason: "disconnected" | "document_replaced"): void {
+    try {
+      this.#onDocumentInvalidated?.(reason);
+    } catch {
+      // Lease invalidation observers are isolated from the session shutdown path.
+    }
+  }
+}
+
+function sameActivationBinding(
+  left: ToolActivationDocumentBinding,
+  right: ToolActivationDocumentBinding,
+): boolean {
+  return (
+    left.documentId === right.documentId &&
+    left.generation === right.generation &&
+    left.tabId === right.tabId
+  );
 }
 
 function tryDisconnect(port: ChromePort | undefined): void {
