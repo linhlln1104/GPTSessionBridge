@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 
 const providerPrefix = "model_providers.gptsessionbridge_web";
+const largeResumePayload = "x".repeat(2 * 1024 * 1024);
 const lines = createInterface({ input: process.stdin, terminal: false });
 
 lines.on("line", (line) => {
@@ -47,6 +48,16 @@ lines.on("line", (line) => {
           key.toUpperCase().startsWith("GPTSESSIONBRIDGE_") &&
           key.toUpperCase() !== "GPTSESSIONBRIDGE_ACTIVE",
       ),
+    });
+    return;
+  }
+  if (request.method === "thread/resume") {
+    respond(request.id, {
+      largeResumePayload,
+      model: "native-model",
+      modelProvider: "native-provider",
+      reasoningEffort: "medium",
+      thread: { id: request.params?.threadId, modelProvider: "native-provider" },
     });
     return;
   }

@@ -8,7 +8,8 @@ import { DEVELOPMENT_EXTENSION_ORIGIN } from "../packages/native-messaging/dist/
 import { verifyWindowsDevelopmentPackage } from "../apps/windows-setup/dist/index.js";
 
 const FRAME_TIMEOUT_MS = 15_000;
-const MAX_APP_SERVER_OUTPUT_BYTES = 1024 * 1024;
+const LARGE_APP_SERVER_PAYLOAD_BYTES = 2 * 1024 * 1024;
+const MAX_APP_SERVER_OUTPUT_BYTES = 8 * 1024 * 1024;
 const MAX_DIAGNOSTIC_BYTES = 4_096;
 const PROTOCOL_VERSION = 2;
 const SEA_FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
@@ -107,7 +108,11 @@ async function smokePackagedFacade(facadePath) {
       params: { path: "", threadId: "native-package-thread" },
     });
     const resumed = assertAppServerResponse(await messages.read(), "3");
-    if (resumed.thread?.id !== "native-package-thread" || resumed.receivedPath !== "") {
+    if (
+      resumed.thread?.id !== "native-package-thread" ||
+      resumed.receivedPath !== "" ||
+      resumed.largeResumePayload?.length !== LARGE_APP_SERVER_PAYLOAD_BYTES
+    ) {
       throw new Error("The packaged facade did not preserve a native resume request.");
     }
 
@@ -134,6 +139,7 @@ async function createFakeCodexExecutable(directory) {
   const source = [
     '"use strict";',
     'const { createInterface } = require("node:readline");',
+    `const largeResumePayload = "x".repeat(${LARGE_APP_SERVER_PAYLOAD_BYTES});`,
     `const expectedArgs = ${JSON.stringify(EXTENSION_APP_SERVER_ARGS)};`,
     "const actualArgs = process.argv.slice(2);",
     "const launchMatches = JSON.stringify(actualArgs) === JSON.stringify(expectedArgs);",
@@ -152,7 +158,7 @@ async function createFakeCodexExecutable(directory) {
     "      : request.method === 'model/list'",
     "        ? { data: [{ id: 'native-package-model', isDefault: true, model: 'native-package-model' }], nextCursor: null }",
     "        : request.method === 'thread/resume'",
-    "          ? { model: 'native-package-model', modelProvider: 'native-package-provider', reasoningEffort: 'medium', receivedPath: request.params?.path, thread: { id: request.params?.threadId, modelProvider: 'native-package-provider' } }",
+    "          ? { largeResumePayload, model: 'native-package-model', modelProvider: 'native-package-provider', reasoningEffort: 'medium', receivedPath: request.params?.path, thread: { id: request.params?.threadId, modelProvider: 'native-package-provider' } }",
     "          : {};",
     "    process.stdout.write(JSON.stringify({ id: request.id, result }) + '\\n');",
     "  });",

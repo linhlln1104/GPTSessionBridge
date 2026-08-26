@@ -41,6 +41,7 @@ The facade launches the official Codex app-server, preserves the JSON meaning of
 - Semantic pass-through for unowned app-server messages.
 - Paginated native model discovery augmented with the currently connected tab's visible Web models.
 - Thread-scoped Web provider, model, reasoning-effort, and catalog-revision pinning.
+- A bounded app-server JSONL proxy with a separate 64 MiB envelope ceiling and 128 MiB buffer/queue ceiling so native thread hydration remains compatible without relaxing browser, Native Messaging, or Responses limits.
 - An authenticated, loopback-only Responses endpoint with separate strict text and Web Agent request paths, bounded streaming, backpressure, safe errors, and disconnect cancellation.
 - Explicit rejection of provider switching, reserved provider/config overrides, Web review/realtime/steering flows, and unsupported resume identities.
 - A strict 4-byte Native Messaging codec with a symmetric 1 MiB frame limit, bounded buffering and writes, exact UTF-8/JSON/schema validation, and serialized backpressure handling.

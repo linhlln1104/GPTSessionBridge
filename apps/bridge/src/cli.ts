@@ -25,9 +25,9 @@ import {
 import { CodexChild } from "./runtime/codex-child.js";
 import { resolveCodexExecutable } from "./runtime/codex-executable.js";
 import { BridgeRuntimeError } from "./runtime/errors.js";
+import { DEFAULT_APP_SERVER_TRANSPORT_LIMITS } from "./transport/app-server-limits.js";
 
 const APP_SERVER_COMMAND = "app-server";
-const DEFAULT_MAX_QUEUED_MESSAGES = 256;
 const DEFAULT_MAX_RESPONSES_CONNECTIONS = 32;
 const FAILURE_EXIT_CODE = 1;
 const SIGINT_EXIT_CODE = 130;
@@ -330,9 +330,9 @@ export async function runAppServerFacade(options: RunAppServerFacadeOptions): Pr
     proxy = new BidirectionalAppServerProxy({
       clientInput: options.clientInput,
       clientOutput: options.clientOutput,
-      maxBufferedBytes: policy.size.maxBufferedBytes,
-      maxFrameBytes: policy.size.maxFrameBytes,
-      maxQueuedMessages: DEFAULT_MAX_QUEUED_MESSAGES,
+      maxBufferedBytes: DEFAULT_APP_SERVER_TRANSPORT_LIMITS.maxBufferedBytes,
+      maxFrameBytes: DEFAULT_APP_SERVER_TRANSPORT_LIMITS.maxFrameBytes,
+      maxQueuedMessages: DEFAULT_APP_SERVER_TRANSPORT_LIMITS.maxQueuedMessages,
       router,
       serverInput: childProcess.stdin,
       serverOutput: childProcess.stdout,

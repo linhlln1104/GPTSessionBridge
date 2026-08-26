@@ -27,6 +27,7 @@ Include only the minimum synthetic reproduction needed to understand the problem
 - Registry commands are not atomic; detected conflicts fail closed, private staging is removed, and promoted content-addressed artifacts are always retained because another installer may already have adopted them.
 - Development uninstall verifies both views, clears 64-bit first, conditionally clears 32-bit if it remains, verifies both absent, and retains content-addressed files. It never edits Chrome profiles or extension state.
 - Native Messaging frames are schema-checked, direction-checked, sequence-checked, and limited to 1 MiB on both links.
+- The official Codex app-server stdio channel is bounded separately at 64 MiB per JSONL envelope and 128 MiB for buffered or queued bytes because native thread hydration can legitimately exceed 1 MiB. These larger limits do not apply to Native Messaging, named-pipe application frames, or loopback Responses request bodies.
 - Transport frames terminate at the native host. Relayed application frames receive a new link-local sequence.
 - A protocol `hello` is never accepted as proof of local-process identity.
 - Bridge-to-host IPC uses the accepted Windows named-pipe design in ADR 0003: protected logon-SID DACL, first-instance ownership, remote-client rejection, one pipe instance, and mutual user/logon/session verification before bytes are relayed.

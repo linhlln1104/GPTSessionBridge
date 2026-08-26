@@ -192,6 +192,38 @@ describe("app-server facade runtime", () => {
     expect(browserIpc.closeCount).toBe(1);
   });
 
+  it("forwards native resume responses larger than one MiB", async () => {
+    const clientInput = new PassThrough();
+    const clientOutput = new PassThrough();
+    const outputFrames = readFrames(clientOutput, 2);
+    const completion = runAppServerFacade({
+      args: [FAKE_APP_SERVER, "app-server"],
+      browserIpc: new FakeBrowserIpcRuntime(),
+      clientInput,
+      clientOutput,
+      env: minimalChildEnvironment(),
+      executable: process.execPath,
+      registerSignalHandlers: false,
+    });
+
+    clientInput.write(`${JSON.stringify({ id: 1, method: "initialize", params: {} })}\n`);
+    clientInput.write(
+      `${JSON.stringify({
+        id: 2,
+        method: "thread/resume",
+        params: { path: "", threadId: "native-large-thread" },
+      })}\n`,
+    );
+
+    const frames = await outputFrames;
+    const resumed = readResult(frames[1]);
+    expect(resumed["thread"]).toMatchObject({ id: "native-large-thread" });
+    expect((resumed["largeResumePayload"] as string).length).toBe(2 * 1024 * 1024);
+
+    clientInput.end();
+    await expect(completion).resolves.toBe(0);
+  });
+
   it("returns a child exit code when the app-server process exits first", async () => {
     const clientInput = new PassThrough();
     const clientOutput = new PassThrough();
