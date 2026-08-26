@@ -105,12 +105,15 @@ async function smokePackagedFacade(facadePath) {
     writeJsonLine(facade.stdin, {
       id: "3",
       method: "thread/resume",
-      params: { path: "", threadId: "native-package-thread" },
+      params: {
+        path: "C:\\synthetic\\package-rollout.jsonl",
+        threadId: "native-package-thread-stale",
+      },
     });
     const resumed = assertAppServerResponse(await messages.read(), "3");
     if (
-      resumed.thread?.id !== "native-package-thread" ||
-      resumed.receivedPath !== "" ||
+      resumed.thread?.id !== "native-package-thread-from-path" ||
+      resumed.receivedPath !== "C:\\synthetic\\package-rollout.jsonl" ||
       resumed.largeResumePayload?.length !== LARGE_APP_SERVER_PAYLOAD_BYTES
     ) {
       throw new Error("The packaged facade did not preserve a native resume request.");
@@ -158,7 +161,7 @@ async function createFakeCodexExecutable(directory) {
     "      : request.method === 'model/list'",
     "        ? { data: [{ id: 'native-package-model', isDefault: true, model: 'native-package-model' }], nextCursor: null }",
     "        : request.method === 'thread/resume'",
-    "          ? { largeResumePayload, model: 'native-package-model', modelProvider: 'native-package-provider', reasoningEffort: 'medium', receivedPath: request.params?.path, thread: { id: request.params?.threadId, modelProvider: 'native-package-provider' } }",
+    "          ? { largeResumePayload, model: 'native-package-model', modelProvider: 'native-package-provider', reasoningEffort: 'medium', receivedPath: request.params?.path, thread: { id: request.params?.path ? 'native-package-thread-from-path' : request.params?.threadId, modelProvider: 'native-package-provider' } }",
     "          : {};",
     "    process.stdout.write(JSON.stringify({ id: request.id, result }) + '\\n');",
     "  });",

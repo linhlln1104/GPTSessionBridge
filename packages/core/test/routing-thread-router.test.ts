@@ -563,8 +563,9 @@ describe("thread route settlement", () => {
       direction: "client-to-server",
       id: "untracked-resume",
       method: "thread/resume",
-      params: { threadId: "thread-requested" },
+      params: { history: null, path: "", threadId: "thread-requested" },
     });
+    expect(router.provisionalThreadCount).toBe(1);
 
     expect(
       settleSuccess(
@@ -591,20 +592,139 @@ describe("thread route settlement", () => {
   });
 
   it.each([
-    ["inline history", { history: [], threadId: "thread-native-history" }],
-    ["a rollout path", { path: "C:\\synthetic\\rollout.jsonl", threadId: "thread-native-path" }],
-  ] as const)("passes through an untracked native resume with %s", (_identity, params) => {
+    [
+      "inline history",
+      { history: [], threadId: "thread-native-history-stale" },
+      "thread-native-history-loaded",
+    ],
+    [
+      "a rollout path",
+      { path: "C:\\synthetic\\rollout.jsonl", threadId: "thread-native-path-stale" },
+      "thread-native-path-loaded",
+    ],
+  ] as const)(
+    "pins the returned native identity when %s overrides threadId",
+    (_identity, params, returnedThreadId) => {
+      const router = createRouter();
+
+      const prepared = router.prepareThreadLifecycle({
+        direction: "client-to-server",
+        id: _identity,
+        method: "thread/resume",
+        params,
+      });
+
+      expect(prepared.route).toBe("native");
+      expect(prepared.params).toBe(params);
+      expect(router.provisionalThreadCount).toBe(0);
+
+      const settlement = settleSuccess(
+        router,
+        _identity,
+        returnedThreadId,
+        "client-to-server",
+        nativeLifecycleResult(returnedThreadId),
+      );
+      expect(settlement).toMatchObject({ route: { kind: "native" }, status: "committed" });
+      expect(router.getThreadRoute(params.threadId)).toBeUndefined();
+      expect(router.getThreadRoute(returnedThreadId)?.kind).toBe("native");
+    },
+  );
+
+  it("accepts the actual fork relation when a native rollout path overrides threadId", () => {
     const router = createRouter();
+    const params = {
+      path: "C:\\synthetic\\fork-source.jsonl",
+      threadId: "thread-native-fork-stale",
+    };
 
     const prepared = router.prepareThreadLifecycle({
       direction: "client-to-server",
-      id: _identity,
-      method: "thread/resume",
+      id: "native-path-fork",
+      method: "thread/fork",
       params,
     });
 
-    expect(prepared.route).toBe("native");
     expect(prepared.params).toBe(params);
+    expect(router.provisionalThreadCount).toBe(0);
+    expect(
+      settleSuccess(
+        router,
+        "native-path-fork",
+        "thread-native-fork-child",
+        "client-to-server",
+        nativeForkLifecycleResult("thread-native-fork-child", "thread-native-fork-actual-source"),
+      ),
+    ).toMatchObject({ route: { kind: "native" }, status: "committed" });
+  });
+
+  it("rejects a native path fork whose actual source is a pinned Web thread", () => {
+    const router = createRouter();
+    pinWebThread(router, "thread-web-source");
+    router.prepareThreadLifecycle({
+      direction: "client-to-server",
+      id: "native-path-fork-web-source",
+      method: "thread/fork",
+      params: {
+        path: "C:\\synthetic\\web-source.jsonl",
+        threadId: "thread-native-fork-stale",
+      },
+    });
+
+    expect(
+      settleSuccess(
+        router,
+        "native-path-fork-web-source",
+        "thread-native-fork-child",
+        "client-to-server",
+        nativeForkLifecycleResult("thread-native-fork-child", "thread-web-source"),
+      ),
+    ).toEqual({ route: "native", status: "invalid-result" });
+    expect(router.getThreadRoute("thread-native-fork-child")).toBeUndefined();
+  });
+
+  it("preserves an existing native route returned by an overriding resume identity", () => {
+    const router = createRouter();
+    pinNativeThread(router, "thread-native-loaded");
+    const existing = router.getThreadRoute("thread-native-loaded");
+    router.prepareThreadLifecycle({
+      direction: "client-to-server",
+      id: "native-path-existing-resume",
+      method: "thread/resume",
+      params: {
+        path: "C:\\synthetic\\native-loaded.jsonl",
+        threadId: "thread-native-stale",
+      },
+    });
+
+    expect(
+      settleSuccess(
+        router,
+        "native-path-existing-resume",
+        "thread-native-loaded",
+        "client-to-server",
+        nativeLifecycleResult("thread-native-loaded"),
+      ),
+    ).toEqual({ route: existing, status: "committed" });
+  });
+
+  it("reserves capacity for a native resume whose path overrides threadId", () => {
+    const router = createRouter({ maxThreadRoutes: 1 });
+    pinNativeThread(router, "thread-native-capacity");
+
+    expectRoutingError(
+      () =>
+        router.prepareThreadLifecycle({
+          direction: "client-to-server",
+          id: "native-path-capacity",
+          method: "thread/resume",
+          params: {
+            path: "C:\\synthetic\\native-capacity.jsonl",
+            threadId: "thread-native-capacity-stale",
+          },
+        }),
+      THREAD_ROUTING_ERROR_CODE.THREAD_CAPACITY,
+    );
   });
 
   it.each(["thread/resume", "thread/fork"] as const)(

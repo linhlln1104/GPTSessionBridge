@@ -53,7 +53,7 @@ This matrix does not claim an end-to-end IDE coding flow, macOS, Linux, a packag
 - Reviews, realtime sessions, and steering are rejected for Web-backed threads.
 - Web `thread/resume` requests with inline history and Web resume/fork requests carrying a non-empty rollout path are rejected; an empty path is treated as absent by Codex.
 - Web route metadata is process-local; the current MVP cannot resume a Web thread after the facade restarts.
-- Resume/fork sources remain quarantined until Codex returns a matching lifecycle identity. A mismatch terminates the facade session and requires the client to reconnect.
+- Effective `threadId` resume/fork sources remain quarantined until Codex returns a matching lifecycle identity. Native inline history and non-empty rollout paths validate and pin the actual returned identity instead. A mismatch terminates the facade session and requires the client to reconnect.
 - Client notifications pass through the same thread and configuration guards as requests. Request-only lifecycle, initialization, and catalog operations are dropped when sent without an identifier.
 - A Web model appears only while the selected tab has produced a valid coordinator capability snapshot. Reconnect the tab to refresh a changed visible catalog.
 - Only one facade can own the deterministic browser IPC listener in a Windows logon session. Additional facades continue to support native Codex, but their Web route remains unavailable; no provider fallback occurs.

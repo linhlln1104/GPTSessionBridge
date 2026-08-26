@@ -68,6 +68,7 @@ interface PendingRouteDecision {
   readonly expectedResumeThreadId: string | null;
   readonly quarantinedThreadId: string | null;
   readonly requiresNewThreadId: boolean;
+  readonly requiresForkSourceIdentity: boolean;
   readonly reservesThreadSlot: boolean;
   readonly route: PinnedThreadRoute;
 }
@@ -156,23 +157,31 @@ export class ThreadRouter {
     if (request.method !== "thread/start" && sourceThreadId === null) {
       throw routingError(THREAD_ROUTING_ERROR_CODE.INVALID_PARAMS);
     }
-    this.#assertThreadAvailable(sourceThreadId);
     const sourceRoute = sourceThreadId === null ? undefined : this.#threads.get(sourceThreadId);
+    const identityOverridesThreadId = lifecycleIdentityOverridesThreadId(request.method, params);
+    if (!identityOverridesThreadId || sourceRoute?.kind === "web") {
+      this.#assertThreadAvailable(sourceThreadId);
+    }
+    const routingSourceRoute =
+      identityOverridesThreadId && sourceRoute?.kind !== "web" ? undefined : sourceRoute;
     const decision = this.#decideLifecycleRoute(
       request.method,
       params,
-      sourceRoute,
+      routingSourceRoute,
       request.catalogRevision,
     );
     if (decision.kind === "web") {
       assertSupportedWebLifecycleIdentity(request.method, params);
       assertNoAmbiguousWebConfigTables(params);
     }
+    const effectiveSourceThreadId =
+      identityOverridesThreadId && decision.kind === "native" ? null : sourceThreadId;
+    const effectiveSourceRoute = effectiveSourceThreadId === null ? undefined : sourceRoute;
     const reservesThreadSlot =
       request.method === "thread/start" ||
       request.method === "thread/fork" ||
-      sourceThreadId === null ||
-      sourceRoute === undefined;
+      effectiveSourceThreadId === null ||
+      effectiveSourceRoute === undefined;
 
     if (
       reservesThreadSlot &&
@@ -186,13 +195,14 @@ export class ThreadRouter {
 
     const quarantinedThreadId =
       (request.method === "thread/resume" || request.method === "thread/fork") &&
-      sourceThreadId !== null
-        ? sourceThreadId
+      effectiveSourceThreadId !== null
+        ? effectiveSourceThreadId
         : null;
     this.#pending.set(requestKey, {
-      expectedForkSourceThreadId: request.method === "thread/fork" ? sourceThreadId : null,
-      expectedResumeThreadId: request.method === "thread/resume" ? sourceThreadId : null,
+      expectedForkSourceThreadId: request.method === "thread/fork" ? effectiveSourceThreadId : null,
+      expectedResumeThreadId: request.method === "thread/resume" ? effectiveSourceThreadId : null,
       quarantinedThreadId,
+      requiresForkSourceIdentity: request.method === "thread/fork",
       requiresNewThreadId: request.method === "thread/start" || request.method === "thread/fork",
       reservesThreadSlot,
       route: decision,
@@ -233,12 +243,16 @@ export class ThreadRouter {
     const unverifiedThreadId = readUnverifiedResponseThreadId(response);
     const threadId = readResponseThreadId(response, pending.route);
     const forkSourceThreadId = readUnverifiedResponseForkSourceThreadId(response);
+    const invalidForkRelation =
+      pending.requiresForkSourceIdentity &&
+      (forkSourceThreadId === null ||
+        forkSourceThreadId === threadId ||
+        (pending.expectedForkSourceThreadId !== null &&
+          forkSourceThreadId !== pending.expectedForkSourceThreadId));
     if (
       threadId === null ||
       (pending.expectedResumeThreadId !== null && threadId !== pending.expectedResumeThreadId) ||
-      (pending.expectedForkSourceThreadId !== null &&
-        (threadId === pending.expectedForkSourceThreadId ||
-          forkSourceThreadId !== pending.expectedForkSourceThreadId)) ||
+      invalidForkRelation ||
       (pending.requiresNewThreadId && this.#threads.has(threadId))
     ) {
       this.#blockThread(unverifiedThreadId);
@@ -246,8 +260,25 @@ export class ThreadRouter {
     }
 
     this.#assertThreadAvailable(threadId);
+    if (pending.requiresForkSourceIdentity) {
+      this.#assertThreadAvailable(forkSourceThreadId);
+    }
     const existing = this.#threads.get(threadId);
-    if (existing !== undefined && !routesEqual(existing, pending.route)) {
+    const forkSource =
+      pending.requiresForkSourceIdentity && forkSourceThreadId !== null
+        ? this.#threads.get(forkSourceThreadId)
+        : undefined;
+    if (pending.route.kind === "native" && forkSource?.kind === "web") {
+      this.#blockThread(threadId);
+      return Object.freeze({ route: pending.route.kind, status: "invalid-result" });
+    }
+    const committedRoute =
+      pending.route.kind === "native" && existing?.kind === "native"
+        ? existing
+        : pending.route.kind === "native" && forkSource?.kind === "native"
+          ? forkSource
+          : pending.route;
+    if (existing !== undefined && !routesEqual(existing, committedRoute)) {
       this.#blockThread(threadId);
       throw routingError(THREAD_ROUTING_ERROR_CODE.ROUTE_CONFLICT);
     }
@@ -256,8 +287,8 @@ export class ThreadRouter {
       throw routingError(THREAD_ROUTING_ERROR_CODE.THREAD_CAPACITY);
     }
 
-    this.#threads.set(threadId, pending.route);
-    return Object.freeze({ route: pending.route, status: "committed" });
+    this.#threads.set(threadId, committedRoute);
+    return Object.freeze({ route: committedRoute, status: "committed" });
   }
 
   validateThreadBound(request: ValidateThreadBoundRequest): unknown {
@@ -858,6 +889,25 @@ function assertSupportedWebLifecycleIdentity(
   ) {
     throw routingError(THREAD_ROUTING_ERROR_CODE.INVALID_PARAMS);
   }
+}
+
+function lifecycleIdentityOverridesThreadId(
+  method: ThreadLifecycleMethod,
+  params: DataRecord | undefined,
+): boolean {
+  if (
+    method === "thread/resume" &&
+    params?.["history"] !== undefined &&
+    params["history"] !== null
+  ) {
+    return true;
+  }
+  const path = params?.["path"];
+  return (
+    (method === "thread/resume" || method === "thread/fork") &&
+    typeof path === "string" &&
+    path.length > 0
+  );
 }
 
 function readResponseThreadId(response: DataRecord, route: PinnedThreadRoute): string | null {

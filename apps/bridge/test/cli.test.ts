@@ -211,13 +211,13 @@ describe("app-server facade runtime", () => {
       `${JSON.stringify({
         id: 2,
         method: "thread/resume",
-        params: { path: "", threadId: "native-large-thread" },
+        params: { path: "C:\\synthetic\\rollout.jsonl", threadId: "native-stale-thread" },
       })}\n`,
     );
 
     const frames = await outputFrames;
     const resumed = readResult(frames[1]);
-    expect(resumed["thread"]).toMatchObject({ id: "native-large-thread" });
+    expect(resumed["thread"]).toMatchObject({ id: "native-thread-from-path" });
     expect((resumed["largeResumePayload"] as string).length).toBe(2 * 1024 * 1024);
 
     clientInput.end();

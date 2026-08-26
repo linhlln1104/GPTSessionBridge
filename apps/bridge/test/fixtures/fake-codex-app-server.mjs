@@ -52,12 +52,16 @@ lines.on("line", (line) => {
     return;
   }
   if (request.method === "thread/resume") {
+    const resumedThreadId =
+      typeof request.params?.path === "string" && request.params.path.length > 0
+        ? "native-thread-from-path"
+        : request.params?.threadId;
     respond(request.id, {
       largeResumePayload,
       model: "native-model",
       modelProvider: "native-provider",
       reasoningEffort: "medium",
-      thread: { id: request.params?.threadId, modelProvider: "native-provider" },
+      thread: { id: resumedThreadId, modelProvider: "native-provider" },
     });
     return;
   }
