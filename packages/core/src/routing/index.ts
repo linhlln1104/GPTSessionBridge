@@ -4,7 +4,11 @@ export {
   routingError,
   type ThreadRoutingErrorCode,
 } from "./errors.js";
-export { ExactVirtualModelRegistry, type VirtualModelRouteDefinition } from "./model-registry.js";
+export {
+  ExactVirtualModelRegistry,
+  type VirtualModelRouteDefinition,
+  type VirtualModelRouteSource,
+} from "./model-registry.js";
 export {
   ThreadRouter,
   WEB_MODEL_PROVIDER_ID,

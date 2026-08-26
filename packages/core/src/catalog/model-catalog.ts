@@ -37,6 +37,7 @@ interface NativeContinuationState {
   readonly ids: readonly string[];
   readonly models: readonly string[];
   readonly nativeCursor: string;
+  readonly virtualModels: readonly VirtualModelEntry[];
 }
 
 interface VirtualCursorState {
@@ -55,6 +56,7 @@ export interface NativeModelListContext {
   readonly nativeCursor: string | null;
   readonly observedIds: readonly string[];
   readonly observedModels: readonly string[];
+  readonly virtualModels: readonly VirtualModelEntry[];
 }
 
 export interface ForwardNativeModelList {
@@ -73,6 +75,7 @@ export type PreparedModelList = ForwardNativeModelList | ReturnVirtualModelList;
 export interface VirtualModelCatalogOptions {
   readonly cursorStore: OpaqueCursorStoreOptions;
   readonly defaultLimit?: number;
+  readonly virtualModelSource?: () => readonly VirtualModelDefinition[];
   readonly virtualModels?: readonly VirtualModelDefinition[];
 }
 
@@ -81,6 +84,7 @@ const MAX_MODEL_IDENTIFIER_LENGTH = 512;
 const MAX_NATIVE_MODELS_PER_PAGE = 4_096;
 const MAX_OBSERVED_NATIVE_MODELS = 4_096;
 const MAX_MODEL_LIST_LIMIT = 4_294_967_295;
+const MAX_VIRTUAL_MODELS = 128;
 
 /**
  * Adds public Web routes after the official model catalog has been exhausted.
@@ -88,7 +92,8 @@ const MAX_MODEL_LIST_LIMIT = 4_294_967_295;
 export class VirtualModelCatalog {
   readonly #cursorStore: OpaqueCursorStore<CatalogCursorState>;
   readonly #defaultLimit: number;
-  readonly #virtualModels: readonly VirtualModelEntry[];
+  readonly #fixedVirtualModels: readonly VirtualModelEntry[] | undefined;
+  readonly #virtualModelSource: (() => readonly VirtualModelDefinition[]) | undefined;
 
   public constructor(options: VirtualModelCatalogOptions) {
     this.#defaultLimit = normalizeLimit(options.defaultLimit ?? 100);
@@ -110,9 +115,24 @@ export class VirtualModelCatalog {
 
     this.#cursorStore = new OpaqueCursorStore<CatalogCursorState>(options.cursorStore);
 
-    const definitions = options.virtualModels ?? [SYNTHETIC_WEB_MODEL_DEFINITION];
-    this.#virtualModels = Object.freeze(definitions.map(createVirtualModelEntry));
-    assertUniqueVirtualModels(this.#virtualModels);
+    if (options.virtualModels !== undefined && options.virtualModelSource !== undefined) {
+      throw new ModelCatalogError(
+        "invalid_configuration",
+        "Configure either fixed virtual models or a virtual-model source, not both.",
+      );
+    }
+
+    if (options.virtualModelSource === undefined) {
+      const definitions = options.virtualModels ?? [SYNTHETIC_WEB_MODEL_DEFINITION];
+      const models = Object.freeze(definitions.map(createVirtualModelEntry));
+      assertUniqueVirtualModels(models);
+      this.#fixedVirtualModels = models;
+      this.#virtualModelSource = undefined;
+    } else {
+      this.#fixedVirtualModels = undefined;
+      this.#virtualModelSource = options.virtualModelSource;
+      this.#readVirtualModels();
+    }
   }
 
   public prepare(request: ModelListRequest): PreparedModelList {
@@ -143,11 +163,13 @@ export class VirtualModelCatalog {
           nativeCursor: state.nativeCursor,
           observedIds: state.ids,
           observedModels: state.models,
+          virtualModels: state.virtualModels,
         }),
         upstreamCursor: state.nativeCursor,
       });
     }
 
+    const virtualModels = this.#readVirtualModels();
     return Object.freeze({
       kind: "forward-native" as const,
       context: Object.freeze({
@@ -157,6 +179,7 @@ export class VirtualModelCatalog {
         nativeCursor: cursor,
         observedIds: Object.freeze([]),
         observedModels: Object.freeze([]),
+        virtualModels,
       }),
       upstreamCursor: cursor,
     });
@@ -177,7 +200,7 @@ export class VirtualModelCatalog {
         "The native model catalog exceeds the bridge collision-checking capacity.",
       );
     }
-    assertNoNativeCollision(ids, models, this.#virtualModels);
+    assertNoNativeCollision(ids, models, context.virtualModels);
 
     if (normalizedPage.nextCursor !== null) {
       const nextCursor = this.#cursorStore.create({
@@ -187,6 +210,7 @@ export class VirtualModelCatalog {
         kind: "native",
         models: Object.freeze([...models]),
         nativeCursor: normalizedPage.nextCursor,
+        virtualModels: context.virtualModels,
       });
       return Object.freeze({
         ...normalizedPage,
@@ -194,13 +218,13 @@ export class VirtualModelCatalog {
       });
     }
 
-    if (!context.completeCollisionCoverage || this.#virtualModels.length === 0) {
+    if (!context.completeCollisionCoverage || context.virtualModels.length === 0) {
       return normalizedPage;
     }
 
     const availableSlots = Math.max(0, context.limit - normalizedPage.data.length);
-    const appended = this.#virtualModels.slice(0, availableSlots);
-    const remaining = this.#virtualModels.slice(appended.length);
+    const appended = context.virtualModels.slice(0, availableSlots);
+    const remaining = context.virtualModels.slice(appended.length);
     const nextCursor =
       remaining.length === 0
         ? null
@@ -218,11 +242,27 @@ export class VirtualModelCatalog {
   }
 
   public hasPublicKey(publicKey: string): boolean {
-    return this.#virtualModels.some((model) => model.id === publicKey);
+    return this.#readVirtualModels().some((model) => model.id === publicKey);
   }
 
   public listVirtualModels(): readonly VirtualModelEntry[] {
-    return this.#virtualModels;
+    return this.#readVirtualModels();
+  }
+
+  #readVirtualModels(): readonly VirtualModelEntry[] {
+    if (this.#fixedVirtualModels !== undefined) {
+      return this.#fixedVirtualModels;
+    }
+    const definitions = this.#virtualModelSource?.();
+    if (!Array.isArray(definitions) || definitions.length > MAX_VIRTUAL_MODELS) {
+      throw new ModelCatalogError(
+        "invalid_configuration",
+        "The virtual model source returned an invalid number of models.",
+      );
+    }
+    const models = Object.freeze(definitions.map(createVirtualModelEntry));
+    assertUniqueVirtualModels(models);
+    return models;
   }
 
   #paginateVirtualModels(

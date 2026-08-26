@@ -16,7 +16,7 @@ import { parseCapabilityToken } from "../src/security/index.js";
 const WEB_MODEL: VirtualModelRouteDefinition = Object.freeze({
   catalogRevision: "catalog-revision-1",
   defaultReasoningEffort: "medium",
-  providerModel: "gptsessionbridge/web/example-model",
+  providerModel: "gptsessionbridge/web/route-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   publicModel: "gptsessionbridge/web/example-model",
   supportedReasoningEfforts: Object.freeze(["low", "medium", "high"]),
 });
@@ -24,7 +24,7 @@ const WEB_MODEL: VirtualModelRouteDefinition = Object.freeze({
 const SECOND_WEB_MODEL: VirtualModelRouteDefinition = Object.freeze({
   catalogRevision: "catalog-revision-1",
   defaultReasoningEffort: "low",
-  providerModel: "gptsessionbridge/web/second-model",
+  providerModel: "gptsessionbridge/web/route-v1-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
   publicModel: "gptsessionbridge/web/second-model",
   supportedReasoningEfforts: Object.freeze(["low", "medium"]),
 });
@@ -151,6 +151,26 @@ describe("exact virtual model registry", () => {
     expect(registry.get("gptsessionbridge/web/example-model ")).toBeUndefined();
   });
 
+  it("refreshes a bounded dynamic registry and keeps provider route tokens private", () => {
+    const opaque = Object.freeze({
+      ...WEB_MODEL,
+      providerModel: "gptsessionbridge/web/route-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    });
+    let definitions: readonly VirtualModelRouteDefinition[] = [opaque];
+    const registry = new ExactVirtualModelRegistry(() => definitions);
+
+    expect(registry.get(opaque.publicModel)).toEqual(opaque);
+    definitions = [SECOND_WEB_MODEL];
+    expect(registry.get(opaque.publicModel)).toBeUndefined();
+    expect(registry.get(SECOND_WEB_MODEL.publicModel)).toEqual(SECOND_WEB_MODEL);
+
+    definitions = [SECOND_WEB_MODEL, SECOND_WEB_MODEL];
+    expectRoutingError(
+      () => registry.get(SECOND_WEB_MODEL.publicModel),
+      THREAD_ROUTING_ERROR_CODE.INVALID_CONFIGURATION,
+    );
+  });
+
   it("rejects duplicate and malformed definitions", () => {
     expectRoutingError(
       () => new ExactVirtualModelRegistry([WEB_MODEL, WEB_MODEL]),
@@ -167,13 +187,40 @@ describe("exact virtual model registry", () => {
     );
     expectRoutingError(
       () =>
-        new ExactVirtualModelRegistry([{ ...WEB_MODEL, providerModel: "private-provider-model" }]),
+        new ExactVirtualModelRegistry([{ ...WEB_MODEL, providerModel: "private provider model" }]),
+      THREAD_ROUTING_ERROR_CODE.INVALID_CONFIGURATION,
+    );
+    expectRoutingError(
+      () => new ExactVirtualModelRegistry([{ ...WEB_MODEL, providerModel: "native-model" }]),
+      THREAD_ROUTING_ERROR_CODE.INVALID_CONFIGURATION,
+    );
+    expectRoutingError(
+      () => new ExactVirtualModelRegistry([{ ...WEB_MODEL, publicModel: WEB_MODEL.providerModel }]),
       THREAD_ROUTING_ERROR_CODE.INVALID_CONFIGURATION,
     );
   });
 });
 
 describe("Web provider injection", () => {
+  it("never classifies a private provider route token as a native model", () => {
+    const opaque = Object.freeze({
+      ...WEB_MODEL,
+      providerModel: "gptsessionbridge/web/route-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    });
+    const router = createRouter({ models: [opaque] });
+
+    expectRoutingError(
+      () =>
+        router.prepareThreadLifecycle({
+          direction: "client-to-server",
+          id: "private-route",
+          method: "thread/start",
+          params: { allowProviderModelFallback: true, model: opaque.providerModel },
+        }),
+      THREAD_ROUTING_ERROR_CODE.WEB_MODEL_UNAVAILABLE,
+    );
+  });
+
   it("clones Web parameters and injects an in-memory provider capability", () => {
     const router = createRouter();
     const params = {
@@ -744,6 +791,7 @@ describe("thread-bound selection invariants", () => {
       params: { personality: "friendly", threadId: "thread-web" },
     });
     expect(resume.params).toMatchObject({
+      allowProviderModelFallback: false,
       config: { model_reasoning_effort: "medium" },
       model: WEB_MODEL.providerModel,
       modelProvider: WEB_MODEL_PROVIDER_ID,

@@ -83,6 +83,7 @@ const DEFAULT_MAX_PENDING_REQUESTS = 256;
 const DEFAULT_MAX_THREAD_ROUTES = 4_096;
 const MAX_REQUEST_ID_LENGTH = 256;
 const MAX_ROUTING_IDENTIFIER_LENGTH = 1_024;
+const MAX_PRIVATE_MATERIAL_SCAN_NODES = 16_384;
 
 const PROVIDER_CONFIG_PREFIX = `model_providers.${WEB_MODEL_PROVIDER_ID}`;
 const MODEL_REASONING_EFFORT_CONFIG = "model_reasoning_effort";
@@ -181,9 +182,7 @@ export class ThreadRouter {
     }
 
     const preparedParams =
-      decision.kind === "web"
-        ? this.#injectWebRoute(request.method, params, decision)
-        : request.params;
+      decision.kind === "web" ? this.#injectWebRoute(params, decision) : request.params;
 
     const quarantinedThreadId =
       (request.method === "thread/resume" || request.method === "thread/fork") &&
@@ -267,15 +266,23 @@ export class ThreadRouter {
     assertNoReservedProviderDefinitions(params);
     const threadId = readOptionalString(params?.["threadId"]);
     this.#assertThreadAvailable(threadId);
+    const pinned = threadId === null ? undefined : this.#threads.get(threadId);
     const selectedModel = readOptionalString(params?.["model"]);
     const selectedProvider = readSelectedProvider(params);
     const selectedVirtual = selectedModel === null ? undefined : this.#models.get(selectedModel);
-    assertAvailableWebReference(params?.["model"], selectedVirtual);
+    assertAvailableWebReference(
+      params?.["model"],
+      selectedVirtual,
+      pinned?.kind === "web" ? pinned.providerModel : null,
+    );
     const collaboration = readCollaborationSelection(params);
     const collaborationVirtual =
       collaboration.model === null ? undefined : this.#models.get(collaboration.model);
-    assertAvailableWebReference(collaboration.modelValue, collaborationVirtual);
-    const pinned = threadId === null ? undefined : this.#threads.get(threadId);
+    assertAvailableWebReference(
+      collaboration.modelValue,
+      collaborationVirtual,
+      pinned?.kind === "web" ? pinned.providerModel : null,
+    );
 
     if (pinned === undefined) {
       if (selectedVirtual !== undefined || collaborationVirtual !== undefined) {
@@ -410,6 +417,46 @@ export class ThreadRouter {
     return this.#threads.get(threadId);
   }
 
+  public containsPrivateProviderMaterial(value: unknown): boolean {
+    const pending: unknown[] = [value];
+    let inspected = 0;
+    while (pending.length > 0) {
+      inspected += 1;
+      if (inspected > MAX_PRIVATE_MATERIAL_SCAN_NODES) {
+        return true;
+      }
+      const current = pending.pop();
+      if (typeof current === "string") {
+        if (
+          current.includes(this.#configuration.capabilityToken) ||
+          current.includes(this.#configuration.baseUrl)
+        ) {
+          return true;
+        }
+        continue;
+      }
+      if (Array.isArray(current)) {
+        for (const nested of current as readonly unknown[]) {
+          pending.push(nested);
+        }
+        continue;
+      }
+      if (!isDataRecord(current)) {
+        continue;
+      }
+      for (const [key, nested] of Object.entries(current)) {
+        if (
+          key.includes(this.#configuration.capabilityToken) ||
+          key.includes(this.#configuration.baseUrl)
+        ) {
+          return true;
+        }
+        pending.push(nested);
+      }
+    }
+    return false;
+  }
+
   discardPending(direction: AppServerRequestDirection, id: AppServerRequestId): boolean {
     const requestKey = serializeDirectionalRequestId(direction, id);
     const pending = this.#pending.get(requestKey);
@@ -449,7 +496,11 @@ export class ThreadRouter {
     const selectedProvider = readSelectedProvider(params);
     const selectedEffort = readLifecycleReasoningEffort(params);
     const selectedVirtual = selectedModel === null ? undefined : this.#models.get(selectedModel);
-    assertAvailableWebReference(selectedModel, selectedVirtual);
+    assertAvailableWebReference(
+      selectedModel,
+      selectedVirtual,
+      sourceRoute?.kind === "web" ? sourceRoute.providerModel : null,
+    );
 
     if (sourceRoute?.kind === "web") {
       if (selectedProvider !== null && selectedProvider !== WEB_MODEL_PROVIDER_ID) {
@@ -491,11 +542,7 @@ export class ThreadRouter {
     );
   }
 
-  #injectWebRoute(
-    method: ThreadLifecycleMethod,
-    params: DataRecord | undefined,
-    route: PinnedThreadRoute,
-  ): DataRecord {
+  #injectWebRoute(params: DataRecord | undefined, route: PinnedThreadRoute): DataRecord {
     if (params === undefined || route.providerModel === null) {
       throw routingError(THREAD_ROUTING_ERROR_CODE.INVALID_PARAMS);
     }
@@ -528,9 +575,7 @@ export class ThreadRouter {
     setDataProperty(cloned, "config", config);
     setDataProperty(cloned, "model", route.providerModel);
     setDataProperty(cloned, "modelProvider", WEB_MODEL_PROVIDER_ID);
-    if (method === "thread/start" || Object.hasOwn(cloned, "allowProviderModelFallback")) {
-      setDataProperty(cloned, "allowProviderModelFallback", false);
-    }
+    setDataProperty(cloned, "allowProviderModelFallback", false);
     return cloned;
   }
 
@@ -914,8 +959,13 @@ function pinCollaborationSelection(params: DataRecord, route: PinnedThreadRoute)
 function assertAvailableWebReference(
   modelValue: unknown,
   selected: VirtualModelRouteDefinition | undefined,
+  permittedProviderModel: string | null = null,
 ): void {
-  if (selected === undefined && isReservedWebModelReference(modelValue)) {
+  if (
+    selected === undefined &&
+    modelValue !== permittedProviderModel &&
+    isReservedWebModelReference(modelValue)
+  ) {
     throw routingError(THREAD_ROUTING_ERROR_CODE.WEB_MODEL_UNAVAILABLE);
   }
 }

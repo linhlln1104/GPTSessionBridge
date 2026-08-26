@@ -276,10 +276,82 @@ describe("virtual model catalog", () => {
     ]);
     expect(secondPage.nextCursor).toBeNull();
   });
+
+  it("freezes a dynamic Web catalog for the lifetime of one paginated native listing", () => {
+    const first = SYNTHETIC_WEB_MODEL_DEFINITION;
+    const second: VirtualModelDefinition = {
+      ...SYNTHETIC_WEB_MODEL_DEFINITION,
+      displayName: "Web · Current Model",
+      publicKey: "gptsessionbridge/web/current-model",
+    };
+    let definitions: readonly VirtualModelDefinition[] = [first];
+    const catalog = createCatalog({ virtualModelSource: () => definitions });
+
+    const initial = requireNative(catalog.prepare({ limit: 10 }));
+    const nativePage = catalog.mergeNativePage(initial, {
+      data: [nativeModel("native/one", true)],
+      nextCursor: "native-next",
+    });
+    definitions = [second];
+
+    const continued = requireNative(catalog.prepare({ cursor: nativePage.nextCursor, limit: 10 }));
+    const completed = catalog.mergeNativePage(continued, { data: [], nextCursor: null });
+    expect(completed.data.map((model) => model.id)).toEqual(["gptsessionbridge/web/example-model"]);
+
+    const refreshed = catalog.mergeNativePage(requireNative(catalog.prepare({ limit: 10 })), {
+      data: [],
+      nextCursor: null,
+    });
+    expect(refreshed.data.map((model) => model.id)).toEqual(["gptsessionbridge/web/current-model"]);
+  });
+
+  it("bounds and unambiguously configures a dynamic Web catalog", () => {
+    expect(() =>
+      createCatalog({
+        virtualModelSource: () => [],
+        virtualModels: [],
+      }),
+    ).toThrow(
+      expect.objectContaining<Partial<ModelCatalogError>>({ code: "invalid_configuration" }),
+    );
+
+    const definitions = Array.from({ length: 129 }, (_, index) => ({
+      ...SYNTHETIC_WEB_MODEL_DEFINITION,
+      publicKey: `gptsessionbridge/web/model-${String(index)}`,
+    }));
+    expect(() => createCatalog({ virtualModelSource: () => definitions })).toThrow(
+      expect.objectContaining<Partial<ModelCatalogError>>({ code: "invalid_configuration" }),
+    );
+  });
+
+  it("does not accept a private provider route token as a public catalog key", () => {
+    expect(() =>
+      createCatalog({
+        virtualModels: [
+          {
+            ...SYNTHETIC_WEB_MODEL_DEFINITION,
+            publicKey: "gptsessionbridge/web/route-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          },
+        ],
+      }),
+    ).toThrow(expect.objectContaining<Partial<ModelCatalogError>>({ code: "invalid_model" }));
+  });
+
+  it("snapshots fixed model definitions at construction", () => {
+    const definition = {
+      ...SYNTHETIC_WEB_MODEL_DEFINITION,
+      displayName: "Web · Fixed",
+    };
+    const catalog = createCatalog({ virtualModels: [definition] });
+    definition.displayName = "Web · Mutated";
+
+    expect(catalog.listVirtualModels()[0]?.displayName).toBe("Web · Fixed");
+  });
 });
 
 interface CatalogOverrides {
   readonly now?: () => number;
+  readonly virtualModelSource?: () => readonly VirtualModelDefinition[];
   readonly virtualModels?: readonly VirtualModelDefinition[];
 }
 
@@ -292,6 +364,9 @@ function createCatalog(overrides: CatalogOverrides = {}): VirtualModelCatalog {
       random: () => `catalog_entropy_${String((sequence += 1)).padStart(16, "0")}`,
       ttlMs: 1_000,
     },
+    ...(overrides.virtualModelSource === undefined
+      ? {}
+      : { virtualModelSource: overrides.virtualModelSource }),
     ...(overrides.virtualModels === undefined ? {} : { virtualModels: overrides.virtualModels }),
   });
 }
