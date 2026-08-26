@@ -534,6 +534,11 @@ async function assertExistingInstallLayout(resolved: ResolvedSetupDependencies):
 
 async function ensureInstallLayout(resolved: ResolvedSetupDependencies): Promise<void> {
   await assertSecureDirectory(resolved.platform.localAppData, undefined, resolved);
+  await assertExistingInstallAncestors(
+    resolved.platform.localAppData,
+    resolved.layout.managedRoot,
+    resolved,
+  );
   await resolved.fileSystem.makeDirectory(resolved.layout.managedRoot, true);
   await assertSecureDirectory(
     resolved.layout.managedRoot,
@@ -548,6 +553,29 @@ async function ensureInstallLayout(resolved: ResolvedSetupDependencies): Promise
     resolved.layout.managedRoot,
     resolved,
   );
+}
+
+async function assertExistingInstallAncestors(
+  root: string,
+  target: string,
+  resolved: ResolvedSetupDependencies,
+): Promise<void> {
+  const separator = resolved.path.style === "windows" ? "\\" : "/";
+  const segments = resolved.path.relative(root, target).split(separator);
+  const realRoot = await resolved.fileSystem.realPath(root);
+  let current = root;
+  for (const segment of segments) {
+    current = resolved.path.join(current, segment);
+    const node = await resolved.fileSystem.inspect(current);
+    if (node === undefined) {
+      return;
+    }
+    if (node.kind !== "directory") {
+      throw new WindowsSetupError("invalid_package_path");
+    }
+    const realCurrent = await resolved.fileSystem.realPath(current);
+    assertPathContained(realRoot, realCurrent, resolved.path, false);
+  }
 }
 
 async function assertSecureDirectory(
