@@ -3,7 +3,9 @@ import { z } from "zod";
 import { bridgeErrorSchema } from "./errors.js";
 import { isSafeSingleLineText } from "./safe-text.js";
 
-export const NATIVE_MESSAGING_PROTOCOL_VERSION = 1 as const;
+export const NATIVE_MESSAGING_PROTOCOL_VERSION = 2 as const;
+export const AGENT_WORKFLOW_PROTOCOL_VERSION = 2 as const;
+export const AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS = 15 * 60 * 1_000;
 export const MAX_TURN_INPUT_ITEMS = 16;
 export const MAX_TURN_INPUT_TEXT_CHARACTERS = 65_536;
 export const MAX_TURN_INPUT_TOTAL_CHARACTERS = 262_144;
@@ -20,6 +22,9 @@ export const sessionIdSchema = z.string().min(1).max(128).regex(opaqueIdPattern)
 export const turnIdSchema = z.string().min(1).max(128).regex(opaqueIdPattern);
 export const modelIdSchema = z.string().min(1).max(256).regex(modelIdPattern);
 export const frameSequenceSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+export const conversationOwnershipIdSchema = z.string().min(1).max(128).regex(opaqueIdPattern);
+export const documentIdSchema = z.string().min(1).max(256).regex(opaqueIdPattern);
+export const leaseIdSchema = z.string().min(1).max(128).regex(opaqueIdPattern);
 
 const implementationVersionSchema = z.string().min(1).max(64).regex(opaqueIdPattern);
 const displayNameSchema = z.string().min(1).max(128).refine(isSafeSingleLineText);
@@ -106,6 +111,60 @@ export const browserCapabilitiesSchema = z
     }
   });
 
+export const agentActivationDocumentBindingSchema = z
+  .object({
+    documentId: documentIdSchema,
+    generation: frameSequenceSchema,
+    tabId: frameSequenceSchema,
+  })
+  .strict();
+
+export const activeAgentStatusSnapshotSchema = z
+  .object({
+    binding: agentActivationDocumentBindingSchema,
+    conversationOwnershipId: conversationOwnershipIdSchema,
+    expiresAtMs: frameSequenceSchema,
+    issuedAtMs: frameSequenceSchema,
+    lastActivityAtMs: frameSequenceSchema,
+    leaseId: leaseIdSchema,
+    revision: frameSequenceSchema,
+    state: z.literal("active"),
+  })
+  .strict()
+  .superRefine((snapshot, context) => {
+    if (
+      snapshot.issuedAtMs > snapshot.lastActivityAtMs ||
+      snapshot.lastActivityAtMs >
+        Number.MAX_SAFE_INTEGER - AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS ||
+      snapshot.expiresAtMs !== snapshot.lastActivityAtMs + AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "The active agent status timestamps are inconsistent.",
+      });
+    }
+  });
+
+export const inactiveAgentStatusSnapshotSchema = z
+  .object({
+    revision: frameSequenceSchema,
+    state: z.literal("inactive"),
+  })
+  .strict();
+
+export const agentStatusSnapshotSchema = z.discriminatedUnion("state", [
+  activeAgentStatusSnapshotSchema,
+  inactiveAgentStatusSnapshotSchema,
+]);
+
+const agentStatusPayloadSchema = z
+  .object({
+    agentProtocolVersion: z.literal(AGENT_WORKFLOW_PROTOCOL_VERSION),
+    sessionId: sessionIdSchema,
+    status: agentStatusSnapshotSchema,
+  })
+  .strict();
+
 const sessionPayloadSchema = z
   .object({
     sessionId: sessionIdSchema,
@@ -135,6 +194,8 @@ const turnInputSchema = z
       items.reduce((total, item) => total + item.text.length, 0) <= MAX_TURN_INPUT_TOTAL_CHARACTERS,
     { message: "Turn input exceeds the protocol character limit." },
   );
+
+const agentTurnInputSchema = z.array(textInputSchema).length(1);
 
 const frameBaseShape = {
   protocolVersion: nativeMessagingProtocolVersionSchema,
@@ -276,6 +337,77 @@ export const capabilitiesChangedFrameSchema = z
   })
   .strict();
 
+export const agentStatusReadFrameSchema = z
+  .object({
+    ...frameBaseShape,
+    type: z.literal("agent/status/read"),
+    payload: sessionPayloadSchema,
+  })
+  .strict();
+
+export const agentStatusResultFrameSchema = z
+  .object({
+    ...frameBaseShape,
+    type: z.literal("agent/status/result"),
+    payload: agentStatusPayloadSchema,
+  })
+  .strict();
+
+export const agentStatusChangedFrameSchema = z
+  .object({
+    ...frameBaseShape,
+    type: z.literal("agent/status/changed"),
+    payload: agentStatusPayloadSchema,
+  })
+  .strict();
+
+export const agentActivityNoteFrameSchema = z
+  .object({
+    ...frameBaseShape,
+    type: z.literal("agent/activity/note"),
+    payload: z
+      .object({
+        expected: activeAgentStatusSnapshotSchema,
+        sessionId: sessionIdSchema,
+      })
+      .strict(),
+  })
+  .strict();
+
+export const agentActivityResultFrameSchema = z
+  .object({
+    ...frameBaseShape,
+    type: z.literal("agent/activity/result"),
+    payload: z
+      .object({
+        agentProtocolVersion: z.literal(AGENT_WORKFLOW_PROTOCOL_VERSION),
+        sessionId: sessionIdSchema,
+        status: activeAgentStatusSnapshotSchema,
+      })
+      .strict(),
+  })
+  .strict();
+
+export const agentTurnStartFrameSchema = z
+  .object({
+    ...frameBaseShape,
+    type: z.literal("agent/turn/start"),
+    payload: z
+      .object({
+        agentProtocolVersion: z.literal(AGENT_WORKFLOW_PROTOCOL_VERSION),
+        catalogRevision: catalogRevisionSchema,
+        expected: activeAgentStatusSnapshotSchema,
+        input: agentTurnInputSchema,
+        modelId: modelIdSchema,
+        reasoningEffort: reasoningEffortSchema,
+        sessionId: sessionIdSchema,
+        temporary: z.literal(false),
+        turnId: turnIdSchema,
+      })
+      .strict(),
+  })
+  .strict();
+
 export const turnStartFrameSchema = z
   .object({
     ...frameBaseShape,
@@ -374,7 +506,7 @@ export const errorFrameSchema = z
   .strict();
 
 /**
- * Native Messaging is a security boundary, so every v1 frame and payload is
+ * Native Messaging is a security boundary, so every v2 frame and payload is
  * closed to unknown fields. Additions require a protocol-version change or a
  * new explicit variant.
  */
@@ -390,6 +522,12 @@ export const nativeMessagingFrameSchema = z.discriminatedUnion("type", [
   capabilitiesReadFrameSchema,
   capabilitiesResultFrameSchema,
   capabilitiesChangedFrameSchema,
+  agentStatusReadFrameSchema,
+  agentStatusResultFrameSchema,
+  agentStatusChangedFrameSchema,
+  agentActivityNoteFrameSchema,
+  agentActivityResultFrameSchema,
+  agentTurnStartFrameSchema,
   turnStartFrameSchema,
   turnStartedFrameSchema,
   turnDeltaFrameSchema,
@@ -407,6 +545,10 @@ export type TurnDeltaChannel = z.infer<typeof turnDeltaChannelSchema>;
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
 export type WebModelDescriptor = z.infer<typeof webModelDescriptorSchema>;
 export type BrowserCapabilities = z.infer<typeof browserCapabilitiesSchema>;
+export type AgentActivationDocumentBinding = z.infer<typeof agentActivationDocumentBindingSchema>;
+export type ActiveAgentStatusSnapshot = z.infer<typeof activeAgentStatusSnapshotSchema>;
+export type InactiveAgentStatusSnapshot = z.infer<typeof inactiveAgentStatusSnapshotSchema>;
+export type AgentStatusSnapshot = z.infer<typeof agentStatusSnapshotSchema>;
 export type NativeMessagingFrame = z.infer<typeof nativeMessagingFrameSchema>;
 export type NativeMessagingFrameType = NativeMessagingFrame["type"];
 export type NativeMessagingFrameOf<Type extends NativeMessagingFrameType> = Extract<

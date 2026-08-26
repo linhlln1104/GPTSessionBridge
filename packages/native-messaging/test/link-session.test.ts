@@ -1,4 +1,5 @@
 import {
+  AGENT_WORKFLOW_PROTOCOL_VERSION,
   NATIVE_MESSAGING_PROTOCOL_VERSION,
   nativeMessagingFrameSchema,
   type NativeMessagingFrame,
@@ -59,6 +60,57 @@ describe("NativeLinkSession", () => {
         }),
       ),
     ).toEqual({});
+  });
+
+  it("admits v2 agent status and activity only through the relay policy", () => {
+    const link = createExtensionLink();
+    link.receive(helloFrame("extension"));
+    const status = activeAgentStatus();
+    const result = nativeMessagingFrameSchema.parse({
+      protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
+      requestId: "request-status",
+      sequence: 1,
+      type: "agent/status/result",
+      payload: {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        sessionId: "session-example",
+        status,
+      },
+    });
+
+    expect(link.receive(result)).toEqual({ application: result });
+    expect(
+      link.sendApplication(
+        nativeMessagingFrameSchema.parse({
+          protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
+          requestId: "request-activity",
+          sequence: 99,
+          type: "agent/activity/note",
+          payload: { expected: status, sessionId: "session-example" },
+        }),
+      ),
+    ).toMatchObject({ sequence: 1, type: "agent/activity/note" });
+    expect(
+      link.sendApplication(
+        nativeMessagingFrameSchema.parse({
+          protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
+          requestId: "request-agent-turn",
+          sequence: 100,
+          type: "agent/turn/start",
+          payload: {
+            agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+            catalogRevision: "catalog-example",
+            expected: status,
+            input: [{ text: "agent prompt", type: "text" }],
+            modelId: "gptsessionbridge/web/model",
+            reasoningEffort: "medium",
+            sessionId: "session-example",
+            temporary: false,
+            turnId: "turn-example",
+          },
+        }),
+      ),
+    ).toMatchObject({ sequence: 2, type: "agent/turn/start" });
   });
 
   it("acknowledges a remote heartbeat without creating an ACK loop", () => {
@@ -211,4 +263,17 @@ function sessionConnectedFrame(sequence: number): NativeMessagingFrame {
     type: "session/connected",
     payload: { sessionId: "session-example" },
   });
+}
+
+function activeAgentStatus(): Readonly<Record<string, unknown>> {
+  return {
+    binding: { documentId: "document-example", generation: 1, tabId: 7 },
+    conversationOwnershipId: "ownership-example",
+    expiresAtMs: 901_000,
+    issuedAtMs: 1_000,
+    lastActivityAtMs: 1_000,
+    leaseId: "lease-example",
+    revision: 1,
+    state: "active",
+  };
 }

@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   BRIDGE_ERROR_CODES,
+  AGENT_WORKFLOW_PROTOCOL_VERSION,
   MAX_TURN_DELTA_CHARACTERS,
   MAX_TURN_INPUT_TEXT_CHARACTERS,
   NATIVE_MESSAGING_PROTOCOL_VERSION,
@@ -24,7 +25,7 @@ describe("native-messaging frames", () => {
       payload: {
         peer: "extension",
         implementationVersion: "0.1.0-fixture",
-        supportedProtocolVersions: [1],
+        supportedProtocolVersions: [NATIVE_MESSAGING_PROTOCOL_VERSION],
       },
     };
 
@@ -156,7 +157,7 @@ describe("native-messaging frames", () => {
       payload: { sessionId: "session-example" },
     };
 
-    expect(nativeMessagingFrameSchema.safeParse({ ...valid, protocolVersion: 2 }).success).toBe(
+    expect(nativeMessagingFrameSchema.safeParse({ ...valid, protocolVersion: 1 }).success).toBe(
       false,
     );
     expect(nativeMessagingFrameSchema.safeParse({ ...valid, sequence: -1 }).success).toBe(false);
@@ -188,13 +189,13 @@ describe("native-messaging frames", () => {
     expect(
       nativeMessagingFrameSchema.safeParse({
         ...hello,
-        payload: { ...hello.payload, supportedProtocolVersions: [2] },
+        payload: { ...hello.payload, supportedProtocolVersions: [1] },
       }).success,
     ).toBe(false);
     expect(
       nativeMessagingFrameSchema.safeParse({
         ...hello,
-        payload: { ...hello.payload, supportedProtocolVersions: [1, 1] },
+        payload: { ...hello.payload, supportedProtocolVersions: [2, 2] },
       }).success,
     ).toBe(false);
     expect(
@@ -204,6 +205,91 @@ describe("native-messaging frames", () => {
           ...hello.payload,
           supportedProtocolVersions: [Number.MAX_SAFE_INTEGER + 1],
         },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("parses strict agent status and activity frames", () => {
+    const active = {
+      binding: { documentId: "document-a", generation: 1, tabId: 7 },
+      conversationOwnershipId: "ownership-a",
+      expiresAtMs: 901_000,
+      issuedAtMs: 1_000,
+      lastActivityAtMs: 1_000,
+      leaseId: "lease-a",
+      revision: 1,
+      state: "active",
+    } as const;
+    const frames = [
+      { ...baseFrame, type: "agent/status/read", payload: { sessionId: "session-example" } },
+      {
+        ...baseFrame,
+        type: "agent/status/result",
+        payload: {
+          agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+          sessionId: "session-example",
+          status: active,
+        },
+      },
+      {
+        ...baseFrame,
+        type: "agent/status/changed",
+        payload: {
+          agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+          sessionId: "session-example",
+          status: { revision: 2, state: "inactive" },
+        },
+      },
+      {
+        ...baseFrame,
+        type: "agent/activity/note",
+        payload: { expected: active, sessionId: "session-example" },
+      },
+      {
+        ...baseFrame,
+        type: "agent/activity/result",
+        payload: {
+          agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+          sessionId: "session-example",
+          status: { ...active, revision: 2 },
+        },
+      },
+      {
+        ...baseFrame,
+        type: "agent/turn/start",
+        payload: {
+          agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+          catalogRevision: "catalog-example-a",
+          expected: active,
+          input: [{ text: "GSB/2 BEGIN\n{}\nGSB/2 END", type: "text" }],
+          modelId: "gptsessionbridge/web/example-model",
+          reasoningEffort: "medium",
+          sessionId: "session-example",
+          temporary: false,
+          turnId: "turn-example",
+        },
+      },
+    ] as const;
+
+    for (const frame of frames) {
+      expect(nativeMessagingFrameSchema.safeParse(frame).success).toBe(true);
+    }
+    expect(
+      nativeMessagingFrameSchema.safeParse({
+        ...frames[3],
+        payload: { ...frames[3].payload, expected: { ...active, expiresAtMs: 901_001 } },
+      }).success,
+    ).toBe(false);
+    expect(
+      nativeMessagingFrameSchema.safeParse({
+        ...frames[5],
+        payload: { ...frames[5].payload, temporary: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      nativeMessagingFrameSchema.safeParse({
+        ...frames[1],
+        payload: { ...frames[1].payload, internalReason: "user_activated" },
       }).success,
     ).toBe(false);
   });

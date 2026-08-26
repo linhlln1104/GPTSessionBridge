@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  AGENT_WORKFLOW_PROTOCOL_VERSION,
+  NATIVE_MESSAGING_PROTOCOL_VERSION,
+} from "@gpt-session-bridge/protocol";
 
 import {
   BrowserNativeLink,
@@ -15,7 +19,7 @@ describe("browser-safe Native Messaging link", () => {
     expect(
       link.receive({
         payload: { implementationVersion: "0.1.0", peer: "nativeHost" },
-        protocolVersion: 1,
+        protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
         requestId: "request-fresh",
         sequence: 0,
         type: "hello/acknowledged",
@@ -32,7 +36,7 @@ describe("browser-safe Native Messaging link", () => {
       link.receive({
         extra: true,
         payload: { implementationVersion: "0.1.0", peer: "nativeHost" },
-        protocolVersion: 1,
+        protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
         requestId: "request-fresh",
         sequence: 0,
         type: "hello/acknowledged",
@@ -53,7 +57,7 @@ describe("browser-safe Native Messaging link", () => {
           temporary: false,
           turnId: "turn-a",
         },
-        protocolVersion: 1,
+        protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
         requestId: "request-turn",
         sequence: 1,
         type: "turn/start",
@@ -100,8 +104,37 @@ describe("browser-safe Native Messaging link", () => {
     ["unknown type", frame("unknown", {})],
     ["unsafe request id", frame("heartbeat", {}, { requestId: "bad request" })],
     ["unsafe sequence", frame("heartbeat", {}, { sequence: -1 })],
-    ["unsupported version", { ...frame("heartbeat", {}), protocolVersion: 2 }],
+    ["unsupported version", { ...frame("heartbeat", {}), protocolVersion: 1 }],
     ["extra payload field", frame("heartbeat", { extra: true })],
+    [
+      "inconsistent agent expiry",
+      frame("agent/activity/note", {
+        expected: { ...activeAgentStatus(), expiresAtMs: 901_001 },
+        sessionId: "session-a",
+      }),
+    ],
+    [
+      "private agent status field",
+      frame("agent/status/result", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        sessionId: "session-a",
+        status: { ...activeAgentStatus(), reason: "user_activated" },
+      }),
+    ],
+    [
+      "agent turn without an exact lease",
+      frame("agent/turn/start", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        catalogRevision: "catalog-a",
+        expected: { ...activeAgentStatus(), expiresAtMs: 901_001 },
+        input: [{ text: "prompt", type: "text" }],
+        modelId: "gptsessionbridge/web/model",
+        reasoningEffort: "medium",
+        sessionId: "session-a",
+        temporary: false,
+        turnId: "turn-a",
+      }),
+    ],
     [
       "inconsistent capabilities",
       frame("capabilities/result", {
@@ -153,7 +186,7 @@ function validProtocolFrames(): readonly (readonly [string, Readonly<Record<stri
       frame("hello", {
         implementationVersion: "0.1.0",
         peer: "extension",
-        supportedProtocolVersions: [1],
+        supportedProtocolVersions: [NATIVE_MESSAGING_PROTOCOL_VERSION],
       }),
     ],
     [
@@ -173,6 +206,49 @@ function validProtocolFrames(): readonly (readonly [string, Readonly<Record<stri
       frame("session/disconnected", { ...session, reason: "pageUnavailable" }),
     ],
     ["capabilities/read", frame("capabilities/read", session)],
+    ["agent/status/read", frame("agent/status/read", session)],
+    [
+      "agent/status/result",
+      frame("agent/status/result", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        ...session,
+        status: activeAgentStatus(),
+      }),
+    ],
+    [
+      "agent/status/changed",
+      frame("agent/status/changed", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        ...session,
+        status: { revision: 2, state: "inactive" },
+      }),
+    ],
+    [
+      "agent/activity/note",
+      frame("agent/activity/note", { expected: activeAgentStatus(), ...session }),
+    ],
+    [
+      "agent/activity/result",
+      frame("agent/activity/result", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        ...session,
+        status: { ...activeAgentStatus(), revision: 2 },
+      }),
+    ],
+    [
+      "agent/turn/start",
+      frame("agent/turn/start", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        catalogRevision: "catalog-a",
+        expected: activeAgentStatus(),
+        input: [{ text: "GSB/2 BEGIN\n{}\nGSB/2 END", type: "text" }],
+        modelId: "gptsessionbridge/web/model",
+        reasoningEffort: "medium",
+        ...session,
+        temporary: false,
+        turnId: "turn-a",
+      }),
+    ],
     [
       "capabilities/result",
       frame("capabilities/result", {
@@ -212,11 +288,24 @@ function frame(
 ): Readonly<Record<string, unknown>> {
   return {
     payload,
-    protocolVersion: 1,
+    protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
     requestId: "request-a",
     sequence: 0,
     type,
     ...overrides,
+  };
+}
+
+function activeAgentStatus(): Readonly<Record<string, unknown>> {
+  return {
+    binding: { documentId: "document-a", generation: 1, tabId: 7 },
+    conversationOwnershipId: "ownership-a",
+    expiresAtMs: 901_000,
+    issuedAtMs: 1_000,
+    lastActivityAtMs: 1_000,
+    leaseId: "lease-a",
+    revision: 1,
+    state: "active",
   };
 }
 

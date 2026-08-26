@@ -6,6 +6,9 @@ import type {
 export const BROWSER_COMMAND_TYPES = Object.freeze([
   "session/connect",
   "session/disconnect",
+  "agent/status/read",
+  "agent/activity/note",
+  "agent/turn/start",
   "capabilities/read",
   "turn/start",
   "turn/cancel",

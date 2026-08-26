@@ -9,7 +9,9 @@ export class BrowserNativeLinkError extends Error {
   }
 }
 
-const PROTOCOL_VERSION = 1;
+const AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS = 900_000;
+const AGENT_WORKFLOW_PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 2;
 const MAX_SEQUENCE = Number.MAX_SAFE_INTEGER;
 const TRANSPORT_TYPES = new Set<NativeMessagingFrameType>([
   "ack",
@@ -18,6 +20,9 @@ const TRANSPORT_TYPES = new Set<NativeMessagingFrameType>([
   "hello/acknowledged",
 ]);
 const INCOMING_APPLICATION_TYPES = new Set<NativeMessagingFrameType>([
+  "agent/activity/note",
+  "agent/status/read",
+  "agent/turn/start",
   "capabilities/read",
   "error",
   "session/connect",
@@ -26,6 +31,9 @@ const INCOMING_APPLICATION_TYPES = new Set<NativeMessagingFrameType>([
   "turn/start",
 ]);
 const OUTGOING_APPLICATION_TYPES = new Set<NativeMessagingFrameType>([
+  "agent/activity/result",
+  "agent/status/changed",
+  "agent/status/result",
   "capabilities/changed",
   "capabilities/result",
   "error",
@@ -193,6 +201,7 @@ function isPayload(type: string, payload: unknown): boolean {
     case "session/connect":
     case "session/connected":
     case "capabilities/read":
+    case "agent/status/read":
       return isSessionPayload(payload);
     case "session/disconnect":
       return (
@@ -213,6 +222,24 @@ function isPayload(type: string, payload: unknown): boolean {
         isOpaqueId(payload["sessionId"], 128) &&
         isCapabilities(payload["capabilities"])
       );
+    case "agent/status/result":
+    case "agent/status/changed":
+      return isAgentStatusPayload(payload);
+    case "agent/activity/note":
+      return (
+        hasExactKeys(payload, ["expected", "sessionId"]) &&
+        isOpaqueId(payload["sessionId"], 128) &&
+        isActiveAgentStatus(payload["expected"])
+      );
+    case "agent/activity/result":
+      return (
+        hasExactKeys(payload, ["agentProtocolVersion", "sessionId", "status"]) &&
+        payload["agentProtocolVersion"] === AGENT_WORKFLOW_PROTOCOL_VERSION &&
+        isOpaqueId(payload["sessionId"], 128) &&
+        isActiveAgentStatus(payload["status"])
+      );
+    case "agent/turn/start":
+      return isAgentTurnStartPayload(payload);
     case "turn/start":
       return isTurnStartPayload(payload);
     case "turn/started":
@@ -250,6 +277,97 @@ function isPayload(type: string, payload: unknown): boolean {
     default:
       return false;
   }
+}
+
+function isAgentTurnStartPayload(value: unknown): boolean {
+  if (
+    !hasExactKeys(value, [
+      "agentProtocolVersion",
+      "catalogRevision",
+      "expected",
+      "input",
+      "modelId",
+      "reasoningEffort",
+      "sessionId",
+      "temporary",
+      "turnId",
+    ]) ||
+    value["agentProtocolVersion"] !== AGENT_WORKFLOW_PROTOCOL_VERSION ||
+    !isOpaqueId(value["sessionId"], 128) ||
+    !isOpaqueId(value["turnId"], 128) ||
+    !isOpaqueId(value["catalogRevision"], 128) ||
+    !isModelId(value["modelId"]) ||
+    !isOpaqueId(value["reasoningEffort"], 64) ||
+    value["temporary"] !== false ||
+    !isActiveAgentStatus(value["expected"]) ||
+    !Array.isArray(value["input"]) ||
+    value["input"].length !== 1
+  ) {
+    return false;
+  }
+  const item: unknown = value["input"][0];
+  return (
+    hasExactKeys(item, ["text", "type"]) &&
+    item["type"] === "text" &&
+    typeof item["text"] === "string" &&
+    item["text"].length >= 1 &&
+    item["text"].length <= 262_144
+  );
+}
+
+function isAgentStatusPayload(value: unknown): boolean {
+  return (
+    hasExactKeys(value, ["agentProtocolVersion", "sessionId", "status"]) &&
+    value["agentProtocolVersion"] === AGENT_WORKFLOW_PROTOCOL_VERSION &&
+    isOpaqueId(value["sessionId"], 128) &&
+    isAgentStatus(value["status"])
+  );
+}
+
+function isAgentStatus(value: unknown): boolean {
+  if (hasExactKeys(value, ["revision", "state"])) {
+    return value["state"] === "inactive" && isSequence(value["revision"]);
+  }
+  return isActiveAgentStatus(value);
+}
+
+function isActiveAgentStatus(value: unknown): boolean {
+  if (
+    !hasExactKeys(value, [
+      "binding",
+      "conversationOwnershipId",
+      "expiresAtMs",
+      "issuedAtMs",
+      "lastActivityAtMs",
+      "leaseId",
+      "revision",
+      "state",
+    ]) ||
+    value["state"] !== "active" ||
+    !isAgentBinding(value["binding"]) ||
+    !isOpaqueId(value["conversationOwnershipId"], 128) ||
+    !isSequence(value["expiresAtMs"]) ||
+    !isSequence(value["issuedAtMs"]) ||
+    !isSequence(value["lastActivityAtMs"]) ||
+    !isOpaqueId(value["leaseId"], 128) ||
+    !isSequence(value["revision"])
+  ) {
+    return false;
+  }
+  return (
+    value["issuedAtMs"] <= value["lastActivityAtMs"] &&
+    value["lastActivityAtMs"] <= Number.MAX_SAFE_INTEGER - AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS &&
+    value["expiresAtMs"] === value["lastActivityAtMs"] + AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS
+  );
+}
+
+function isAgentBinding(value: unknown): boolean {
+  return (
+    hasExactKeys(value, ["documentId", "generation", "tabId"]) &&
+    isOpaqueId(value["documentId"], 256) &&
+    isSequence(value["generation"]) &&
+    isSequence(value["tabId"])
+  );
 }
 
 function isTurnStartPayload(value: unknown): boolean {

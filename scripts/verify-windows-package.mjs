@@ -9,7 +9,7 @@ import { verifyWindowsDevelopmentPackage } from "../apps/windows-setup/dist/inde
 
 const FRAME_TIMEOUT_MS = 15_000;
 const MAX_DIAGNOSTIC_BYTES = 4_096;
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const arguments_ = process.argv.slice(2);
 const allowUnsupportedPlatform = arguments_.length === 1 && arguments_[0] === "--if-supported";
 
