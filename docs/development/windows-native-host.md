@@ -58,7 +58,7 @@ Remove the unpacked extension from Chrome separately. The setup command never cl
 
 ## Current limit
 
-A successful Native Host installation proves only the local Chrome-to-bridge transport boundary. The extension still advertises `modelDiscovery: false`, does not manipulate the ChatGPT page, and rejects turns. The visible-UI adapter and Responses integration are separate reviewed milestones.
+A successful Native Host installation proves only the local Chrome-to-bridge transport boundary. To exercise the Phase 4 adapter manually, open a fresh `https://chatgpt.com/` surface with no transcript, press Connect in the unpacked extension, and refresh the Codex model list. Only `Web · …` models discovered from that selected document are advertised. The observed nested picker currently requires the English accessible submenu name `Model`; localized variants are not certified. The provider accepts only the documented plain-text subset, so normal Codex coding requests carrying developer instructions or tool definitions fail closed. Do not use a real account or submit account/source content during development unless that test is explicitly authorized; automated verification uses synthetic DOM and does not contact ChatGPT.
 
 The generated artifact is for local development and is not a redistributable release bundle. Signing, protected installation, release identities, and a complete third-party license inventory remain release gates.
 

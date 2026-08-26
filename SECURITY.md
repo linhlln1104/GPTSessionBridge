@@ -1,6 +1,6 @@
 # Security Policy
 
-GPTSessionBridge is pre-alpha and has not received an independent security audit. The Phase 2 facade, authenticated Windows IPC, browser-session coordinator, Native Messaging runtime, least-privilege MV3 shell, and unsigned per-user Windows development package are implemented and tested. The ChatGPT Web adapter, Responses integration, protected production installation, and code signing are not. The `main` branch is the only supported development line. No release should be treated as production-ready until this policy explicitly says otherwise.
+GPTSessionBridge is pre-alpha and has not received an independent security audit. The facade, authenticated Windows IPC, browser-session coordinator, Native Messaging runtime, UI-only explicit-tab adapter, strict text-only Responses integration, and unsigned per-user Windows development package are implemented and tested with synthetic fixtures. Protected production installation, code signing, Codex tool-call support, and real-account certification are not. The `main` branch is the only supported development line. No release should be treated as production-ready until this policy explicitly says otherwise.
 
 ## Reporting a vulnerability
 
@@ -14,6 +14,11 @@ Include only the minimum synthetic reproduction needed to understand the problem
 - Codex credentials remain under the official Codex client's authentication flow.
 - The browser extension connects only after an explicit user action and revalidates the selected tab and document across asynchronous browser operations.
 - Browser permissions are limited to `activeTab`, `scripting`, and `nativeMessaging`; there are no persistent host, cookie, debugger, history, or storage permissions.
+- The page adapter uses visible DOM and accessibility semantics only. It does not read browser storage or page JavaScript state and does not call ChatGPT backend endpoints.
+- A first turn requires a fresh `/` conversation with no transcript. Later turns remain bound to the first adapter-submitted user message and adopted conversation path; the adapter never navigates or submits into an arbitrary existing chat.
+- Model discovery derives public descriptors from visible picker semantics. Provider tokens are opaque, contain no credential, and resolve only against the coordinator's current exact catalog revision.
+- Catalog or selected-model drift detected by the final pre-submit revalidation fails closed before composer mutation. The composer write and Send click then execute synchronously. Once that click is issued, a later catalog snapshot applies only to future routes; it does not replay, cancel, or reroute the active owned turn. Conversation-ownership, start-confirmation, or visible-surface failure still fails that active turn without automatic replay.
+- Disconnect teardown makes only a best-effort cancellation request through a currently visible, verified Stop control. If the document or transport is already unavailable, or the control has not appeared, the bridge cannot confirm that ChatGPT stopped generating; generation and Web usage may continue until the user checks the selected tab.
 - The Native Messaging host accepts one exact canonical extension origin; wildcard origins are rejected.
 - Development registration uses the separate `com.gptsessionbridge.native_host.dev` HKCU identity so it cannot shadow a future production host name. Setup accepts no caller-supplied extension identity or host name.
 - The development installer verifies a complete content-hash manifest, rejects links and path traversal, copies into a content-addressed user-local directory, refuses unmanaged ownership in either Chrome registry view, and registers only after the package and generated Chrome manifest are verified.
@@ -30,17 +35,19 @@ Include only the minimum synthetic reproduction needed to understand the problem
 - The capability is generated per facade process, kept only in process memory, and never placed in child environment variables, command-line arguments, logs, or persistent configuration.
 - The capability is injected directly into the in-memory app-server configuration sent to the official Codex child for a Web-backed thread. The official Codex child is therefore inside the trusted boundary.
 - Protocol mismatches, disconnected sessions, and unavailable models fail closed.
+- The Responses endpoint accepts exactly one bounded user text item preserved by browser protocol v1. Multiple messages or parts, tools, images, instructions, non-user roles, structured output, chaining, and persistence requests are rejected rather than joined, removed, or reinterpreted.
 - Provider selection never falls back silently.
 - Failure to acquire the optional browser IPC listener does not disable native Codex traffic; Web routes remain unavailable and are never redirected to Codex usage.
 - Client-supplied definitions and persistent config writes for the reserved Web provider or model namespace are rejected instead of merged or trusted.
 - Reviews, realtime sessions, steering, unverified derived threads, and `thread/resume` or `thread/fork` requests carrying a rollout path fail closed for Web routes until their routing identity can be verified safely.
 - Resume/fork sources are quarantined until their lifecycle identity is validated; server requests and pipelined thread operations cannot cross that boundary. Lifecycle notifications without a request identifier are dropped because they cannot be correlated with a validating response.
+- Web lifecycle results expose only the pinned public model key. Any residual private route token, bearer capability, or loopback provider URL fails closed; Web lifecycle errors and child warnings containing the private route token are replaced with content-free bridge messages.
 - A successful resume must return the requested thread identifier. A successful fork must return a new thread identifier and name the requested source in `thread.forkedFromId`.
 - A thread identifier returned with an invalid lifecycle identity is tombstoned in bounded memory and the facade session terminates, preventing continued execution in an untrusted routing state.
 - Runtime diagnostics exclude prompts, responses, browser content, paths, configuration payloads, and credentials. The interactive setup CLI returns only the installed artifact paths required to load or inspect the development package.
 - The bridge does not add persistent storage for Web route metadata or conversation content, and telemetry is disabled by default. The official Codex child remains responsible for its normal thread storage according to the request and Codex configuration.
 
-In the current runtime, an authenticated request to the local Responses endpoint returns `session_not_connected`. This remains the expected terminal state until a reviewed Responses adapter can preserve the coordinator's pinned session and `catalogRevision`; the facade must not simulate a Web response or route the request to native Codex.
+In the current runtime, a supported plain-text Responses request can reach the explicitly selected ChatGPT tab and stream visible assistant text. A request without a connected tab returns `session_not_connected`; stale catalogs and unsupported semantics return explicit errors. Normal Codex coding requests include developer or tool semantics outside this text-only contract and fail closed. The facade must not simulate tool calls, select another model, replay a prompt, or route the request to native Codex.
 
 The unsigned development package is writable by the current user and does not establish executable identity against another process already running as that user. Same-user registry mutation cannot be made transactional through `reg.exe` and remains outside this trust boundary. Production distribution requires a protected installation location, reserved release extension/host identities, code signing, and a separately reviewed installer.
 

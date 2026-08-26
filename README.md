@@ -3,12 +3,13 @@
 GPTSessionBridge is a local bridge that lets a Codex client route an explicitly selected thread to a ChatGPT Web model while the user's ChatGPT session remains inside their existing browser.
 
 > [!WARNING]
-> This project is pre-alpha and not production-ready. The authenticated Windows IPC, browser-session coordinator, Native Messaging runtime, explicit-tab Manifest V3 shell, and reversible per-user development packaging are implemented and tested. The package is unsigned, and the ChatGPT page adapter and Responses integration are not implemented. A Web request currently fails with `session_not_connected` after the local provider boundary verifies it.
+> This project is pre-alpha and not production-ready. The UI-only ChatGPT adapter and local Responses integration are implemented for bounded plain-text turns on an explicitly selected fresh chat. The package is unsigned, real-account compatibility is not certified, and normal Codex coding requests that carry developer instructions or tool definitions remain unsupported and fail closed.
 
 ## Design goals
 
 - Never ask users to sign in to ChatGPT inside an unfamiliar desktop application.
 - Never export or persist ChatGPT cookies, access tokens, or browser profiles.
+- Operate only visible ChatGPT UI; never call undocumented or private ChatGPT backend endpoints.
 - Let users choose a connected Web model from the Codex model picker.
 - Keep Codex authentication, approvals, sandboxing, and native threads under the official Codex app-server.
 - Fail closed when a browser session, model, or protocol capability is unavailable.
@@ -23,7 +24,7 @@ Codex IDE extension
         v
 GPTSessionBridge facade --------> official Codex app-server
         |        \
-        |         +--> local Responses provider (terminal 503 today)
+        |         +--> authenticated local Responses provider
         |
         +--> BrowserSessionCoordinator
                  |
@@ -32,35 +33,40 @@ GPTSessionBridge facade --------> official Codex app-server
           Native Messaging host <--> MV3 extension <--> selected chatgpt.com tab
 ```
 
-The Phase 2 facade launches the official Codex app-server, preserves the JSON meaning of unowned protocol messages, appends a synthetic Web model to paginated `model/list` results, and pins the local Web provider when that model is selected. The current Phase 3 increment adds an authenticated Windows rendezvous, two independent Native Messaging links, an in-memory browser-session coordinator, a least-privilege extension shell, and a content-addressed Windows development package. The page adapter remains deliberately unavailable, so no real Web turn is submitted.
+The facade launches the official Codex app-server, preserves the JSON meaning of unowned protocol messages, and projects the selected tab's current visible model catalog into paginated `model/list` results. Selecting a `Web · …` entry pins an opaque provider route to the exact browser catalog revision. The Responses provider then carries supported plain-text turns through the authenticated coordinator, Native Messaging host, MV3 extension, and visible ChatGPT UI.
 
 ### Available now
 
 - A runnable stdio app-server facade backed by the official Codex child process.
 - Semantic pass-through for unowned app-server messages.
-- Paginated native model discovery with a synthetic `gptsessionbridge/web/example-model` entry.
+- Paginated native model discovery augmented with the currently connected tab's visible Web models.
 - Thread-scoped Web provider, model, reasoning-effort, and catalog-revision pinning.
-- An authenticated, loopback-only Responses endpoint with bounded request handling.
+- An authenticated, loopback-only Responses endpoint with strict text-only parsing, bounded streaming, backpressure, safe errors, and disconnect cancellation.
 - Explicit rejection of provider switching, reserved provider/config overrides, Web review/realtime/steering flows, and unsupported resume identities.
 - A strict 4-byte Native Messaging codec with a symmetric 1 MiB frame limit, bounded buffering and writes, exact UTF-8/JSON/schema validation, and serialized backpressure handling.
 - Independent extension and bridge link state machines with peer, version, sequence, heartbeat, direction, and extension-origin checks.
 - A self-contained .NET Windows helper with a protected logon-SID pipe DACL, first-instance ownership, remote-client rejection, and mutual peer token verification.
 - A bounded `BrowserSessionCoordinator` that owns one authenticated transport, immutable capability snapshots, one active turn, backpressure, cancellation races, and exactly one terminal result.
 - A Native Messaging runtime that opens bridge IPC only after validating the exact extension origin and completing the extension-side handshake.
-- A Manifest V3 extension shell that connects only an explicitly selected `https://chatgpt.com` tab using `activeTab`, `scripting`, and `nativeMessaging`; it requests no cookie, debugger, storage, history, or broad host access.
+- A Manifest V3 extension that connects only an explicitly selected `https://chatgpt.com` tab using `activeTab`, `scripting`, and `nativeMessaging`; its isolated content adapter reads semantic visible UI, discovers the model picker, verifies selection, submits bounded text, streams visible assistant text, and requests no cookie, debugger, storage, history, or broad host access.
 - A Windows x64 development package containing a pinned Node 24 single-executable Native Host, its adjacent self-contained IPC helper, the unpacked MV3 extension, and a strict content-hash manifest.
 - Conservative per-user `install`, `status`, and `uninstall` commands using the development-only `com.gptsessionbridge.native_host.dev` HKCU identity. Setup reconciles both Chrome registry views in precedence-aware order, refuses foreign ownership, and never edits a Chrome profile.
 
 ### Not available yet
 
-- Real ChatGPT Web model discovery or response streaming.
-- A reviewed ChatGPT DOM adapter or any credential/backend extraction path.
+- Codex developer instructions, tool definitions or calls, images, structured output, previous-response chaining, or other Responses semantics that cannot be preserved by the text-only browser protocol.
+- A complete coding-agent workflow through ChatGPT Web. The adapter never imitates tool calls by parsing prose.
 - A signed production installer, protected per-machine installation, reserved Chrome Web Store identity, or code signing.
 - A redistributable release bundle with a completed third-party license inventory.
-- Automated real-Chrome or real-account compatibility certification. Development setup is intentionally separate from a production distribution claim.
-- Responses-to-coordinator integration with trustworthy pinned `catalogRevision` propagation.
+- Automated real-Chrome or real-account compatibility certification. Current DOM anchors received a read-only live UI audit. Automated coverage uses a fake UI driver plus pure semantic and state fixtures; there is not yet a direct browser DOM-runtime suite, and development setup is not a production distribution claim.
 
-The current Responses endpoint therefore returns HTTP 503 with `session_not_connected` for a valid Web request. The synthetic model exists to verify the facade and model-picker integration; it is not a usable ChatGPT model.
+A Web model is advertised only while an explicitly selected tab has supplied a valid capability snapshot. The first turn requires a fresh ChatGPT surface at `/` with no existing transcript. The adapter never navigates to New chat or appends to an arbitrary existing conversation. Catalog or selected-model drift detected by the final pre-submit revalidation fails closed before the composer is changed. The composer write and Send click then run synchronously. After that click, a new catalog applies only to future routes; the active owned turn continues without replay or rerouting while its conversation ownership and visible response surface remain valid. If visible start confirmation fails after the click, the turn fails without automatic replay, and the prompt may still appear in ChatGPT history.
+
+The adapter supports a direct model picker and the currently observed nested submenu whose accessible name is the English word `Model`. Localized ChatGPT picker variants are not certified; an unrecognized or ambiguous UI makes the Web catalog or turn unavailable instead of guessing.
+
+The bridge adds no ChatGPT conversation persistence or cleanup. Prompts and responses submitted through the visible composer may remain in ChatGPT history according to the user's account settings.
+
+On disconnect or teardown, the adapter makes a best-effort attempt to click a currently visible, verified Stop control for its active turn. If the selected document or transport is already unavailable, or the Stop control has not become visible, the bridge cannot confirm that ChatGPT stopped generating; the user should check the selected tab because generation and Web usage may continue.
 
 Switching between Codex and Web providers requires a new thread. The bridge never silently falls back to another provider or model.
 
@@ -110,7 +116,7 @@ corepack pnpm native-host:status
 corepack pnpm native-host:uninstall
 ```
 
-`smoke:app-server` builds the workspace, launches the facade against the installed Codex CLI, and verifies the app-server handshake plus synthetic model catalog contract. On Windows x64, `package:windows` also launches the packaged SEA executable against the packaged IPC helper from an empty temporary working directory and verifies a bidirectional Native Messaging relay without changing the registry. Windows CI separately opts into an install/status/uninstall round trip across both registry views under the isolated `.dev` HKCU key and refuses any pre-existing value. Automated integration tests verify the current `session_not_connected` provider response, Windows IPC authentication, coordinator lifecycle, setup ownership and detected-race handling, and MV3 output policy. None of these paths contacts ChatGPT Web or a real account.
+`smoke:app-server` builds the workspace, launches the facade against the installed Codex CLI, and verifies the app-server handshake plus an empty fail-closed Web catalog when no tab is connected. On Windows x64, `package:windows` also launches the packaged SEA executable against the packaged IPC helper from an empty temporary working directory and verifies a bidirectional Native Messaging relay without changing the registry. Windows CI separately opts into an install/status/uninstall round trip across both registry views under the isolated `.dev` HKCU key and refuses any pre-existing value. Automated tests cover dynamic model projection, exact revision routes, Responses streaming and rejection behavior, DOM-adapter state, Windows IPC, coordinator lifecycle, setup ownership, and MV3 output policy. They do not submit a prompt to ChatGPT Web or use a real account.
 
 See [Windows development setup](docs/development/windows-native-host.md) before registering the development host or loading the unpacked extension.
 
@@ -118,7 +124,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
 
 ## Project status
 
-Phase 2 establishes a runnable app-server facade, model-catalog augmentation, fail-closed thread routing, an authenticated local provider boundary, and versioned protocols. Phase 3a adds a tested Native Messaging transport and direction-aware relay foundation. Phase 3b adds authenticated Windows IPC, `BrowserSessionCoordinator`, Native Host runtime wiring, and an explicit-tab MV3 shell. The current Phase 3c increment adds a verified self-contained development package and reversible per-user Native Messaging registration. Browser automation, Responses integration, production signing, and real-account fixtures remain deliberately excluded.
+Phase 2 establishes a runnable app-server facade, model-catalog augmentation, fail-closed thread routing, an authenticated local provider boundary, and versioned protocols. Phase 3 adds the authenticated Windows/Native Messaging transport, `BrowserSessionCoordinator`, explicit-tab MV3 shell, and verified development package. The current Phase 4 increment adds a UI-only ChatGPT DOM adapter, dynamic Web model catalog, revision-bound provider routes, and strict text-only Responses streaming. Tool-capable Codex execution, production signing, and real-account certification remain deliberately excluded.
 
 The current compatibility snapshot was tested on 2026-08-25 with Codex CLI `0.149.0-alpha.4.3`, Node.js `24.18.1`, and Windows x64. See [Compatibility](docs/compatibility.md) for the exact scope and limitations.
 

@@ -4,7 +4,7 @@
 
 GPTSessionBridge lets a Codex client create a thread backed by a ChatGPT Web model without moving the user's ChatGPT login into the bridge. It integrates at the Codex app-server boundary and uses a browser extension to operate only a tab the user explicitly connected.
 
-Phase 2 implements the app-server facade, synthetic model catalog, thread routing, official Codex child lifecycle, and authenticated local Responses stub. Phase 3a implements the Native Messaging transport and relay state machine. Phase 3b adds authenticated Windows host-to-bridge IPC, `BrowserSessionCoordinator`, the Native Host runtime, and an explicit-tab Manifest V3 connection shell. The current Phase 3c increment adds a self-contained Windows development package and conservative per-user host registration. The ChatGPT page adapter and Responses adapter remain future work. Consequently, a valid Web request currently terminates with `session_not_connected` rather than a simulated response.
+Phase 2 implements the app-server facade, initial model-catalog routing, official Codex child lifecycle, and authenticated local Responses boundary. Phase 3 adds the Native Messaging relay, authenticated Windows host-to-bridge IPC, `BrowserSessionCoordinator`, explicit-tab Manifest V3 shell, and Windows development package. The current Phase 4 increment replaces the fixed Web fixture with the coordinator's dynamic visible-UI catalog and connects a strict text-only Responses adapter to a UI-only ChatGPT DOM adapter.
 
 ## Components
 
@@ -14,22 +14,24 @@ The implemented facade is a bidirectional protocol proxy. It launches the offici
 
 The facade owns two operations:
 
-1. Merge the current synthetic Web model into paginated `model/list` results.
+1. Merge the current coordinator capability snapshot's Web models into paginated `model/list` results.
 2. Pin the configured provider for verified Web-backed `thread/start`, `thread/resume`, and `thread/fork` requests.
 
-Phase 2 uses a fixed synthetic catalog revision. `BrowserSessionCoordinator` already requires every browser capability snapshot to have an opaque revision and validates the selected model, reasoning effort, temporary-chat support, and revision before a turn starts. The page adapter currently reports an unavailable catalog, and the synthetic facade catalog is not yet replaced by coordinator state. A future Responses adapter must propagate the same pinned revision so a stale picker selection cannot execute against changed browser capabilities.
+`BrowserSessionCoordinator` requires every browser capability snapshot to have an opaque revision and validates the selected session, generation, model, reasoning effort, temporary-chat support, and revision before a turn starts. The facade gives each visible model a snapshot-bound public picker key and rewrites it to a separate opaque provider token. Both identities are derived from the selected session, snapshot generation, catalog revision, and browser model ID; neither reveals those inputs. They intentionally change after reconnect or catalog replacement so a stale picker selection becomes unavailable. The provider token is not a secret and is never published in `model/list`.
 
 Native Codex threads pass through without custom-provider routing. The bridge does not proxy native Codex API traffic.
 
 For a Web-backed thread, the facade removes request-local definitions of its reserved provider and injects the complete provider configuration itself. A fresh bearer capability and ephemeral loopback base URL are passed directly through the in-memory app-server request to the trusted official Codex child. They are not placed in the child environment, command-line arguments, logs, or persistent configuration.
 
+The provider token exists only on the child-facing side of this boundary. Before a Web lifecycle response reaches the IDE, the facade rewrites the reported model to the pinned public picker key and rejects any remaining private route token, bearer capability, or loopback provider URL. Web lifecycle errors and child warnings containing the private route token are replaced with bounded, content-free compatibility errors or notices. Native lifecycle traffic remains unchanged.
+
 ### Local Responses provider boundary
 
-The implemented Phase 2 stub presents the narrow authenticated endpoint required by the Codex child for a Web-backed thread. It binds only to an ephemeral IPv4 loopback port, validates the process capability, bounds request resources, accepts only `POST /v1/responses`, validates a JSON object body, and returns `session_not_connected`.
+The local provider presents the narrow authenticated endpoint required by the Codex child for a Web-backed thread. It binds only to an ephemeral IPv4 loopback port, validates the process capability and loopback request policy, bounds connections, headers, body, lifetime, and output, and accepts only `POST /v1/responses` with fatal UTF-8 and strict JSON validation.
 
-A later Phase 3 increment will replace the terminal stub behavior with a Responses adapter that propagates cancellation, emits a terminal event exactly once, and translates between Responses streaming events and the versioned browser protocol. It must receive the route's pinned `catalogRevision`; substituting the coordinator's latest revision would permit a stale selection and is therefore rejected by design.
+Protocol v1 preserves bounded user text, visible output text, streaming, cancellation, one exact UI model choice, and no temporary-chat guarantee. The Responses parser therefore rejects tools, images, non-user roles, instructions, previous-response chaining, persistence, structured output, and unknown fields rather than dropping or reinterpreting them. Streaming emits a minimal Responses text lifecycle with serialized backpressure; client disconnect and output overflow cancel the browser turn. Browser errors are mapped to content-free local errors and never reflected verbatim.
 
-Protocol v1 currently declares text input only and reports `toolCalls: false` and `imageInput: false`. A future adapter must reject unsupported Responses input explicitly; it must not discard tools, images, roles, or other semantics to force a browser turn through the narrower protocol.
+This subset supports plain-text adapter turns but is not a complete Codex coding-agent provider. Normal Codex coding requests in the tested snapshot carry developer instructions and tool definitions and therefore fail closed at this boundary. Those semantics require a separate protocol decision; the bridge does not infer executable tool calls from prose.
 
 ### Native Messaging host
 
@@ -49,35 +51,29 @@ The deterministic pipe permits one Web-enabled facade per Windows logon session.
 
 ### Browser session coordinator
 
-`BrowserSessionCoordinator` owns at most one authenticated browser transport and one active turn. It correlates session, capability, turn, and cancellation messages; freezes capability snapshots; rejects stale catalog revisions and unsupported options; serializes delta delivery through an asynchronous sink; bounds pending operations and timeouts; and settles every turn exactly once. It never replays a prompt after transport loss. A valid browser session disconnect causes the broker to discard the pipe and establish a fresh authenticated channel.
+`BrowserSessionCoordinator` owns at most one authenticated browser transport and one active turn. It correlates session, capability, turn, and cancellation messages; freezes capability snapshots; rejects stale catalog revisions and unsupported options before start; serializes delta delivery through an asynchronous sink; bounds pending operations and timeouts; and settles every turn exactly once. It never replays a prompt after transport loss. A valid browser session disconnect causes the broker to discard the pipe and establish a fresh authenticated channel.
 
 ### Browser extension
 
-The Manifest V3 shell connects only after the user presses Connect. The service worker queries the active tab itself, accepts only an exact `https://chatgpt.com` document, injects one isolated main-frame content probe under `activeTab`, binds the port to the returned `documentId`, and then opens the exact Native Messaging host. Disconnect invalidates the in-flight connection generation so a delayed tab query or injection cannot restore consent implicitly.
+The Manifest V3 extension connects only after the user presses Connect. The service worker queries the active tab itself, accepts only an exact `https://chatgpt.com` document, injects one isolated main-frame content script under `activeTab`, binds the port to the returned `documentId`, and then opens the exact Native Messaging host. Disconnect invalidates the in-flight connection generation so a delayed tab query or injection cannot restore consent implicitly.
 
-The extension has no persistent host access and no cookie, debugger, history, storage, or broad content-script permission. Its browser bundle uses a strict protocol parser and the build rejects dynamic-code constructs forbidden by the MV3 content security policy. The current content adapter deliberately reports `modelDiscovery: false` with an empty catalog and rejects turns. DOM-specific discovery and visible-page interaction remain isolated future work.
+The extension has no persistent host access and no cookie, debugger, history, storage, or broad content-script permission. Its self-contained classic content bundle uses a strict sequenced page protocol, and the build rejects module leakage and dynamic-code constructs forbidden by the MV3 content security policy.
+
+The DOM driver operates ordinary visible controls using semantic roles, accessibility names, form relationships, and author-role message markers. Catalog discovery supports a direct picker and the observed nested submenu whose accessible name is the English word `Model`; localized submenu semantics remain unverified. Selection is confirmed by reopening the picker. A first turn requires a fresh `/` surface with no transcript; after submission, later turns remain bound to the first adapter-created user message and adopted conversation path. It never clicks New chat or navigates on the user's behalf. Assistant deltas come only from bounded visible text, and cancellation requires one verified stop control. Ambiguity or UI drift fails closed.
+
+Catalog or selected-model drift detected by the final pre-submit revalidation fails the pending turn before composer mutation. The composer write and Send click then run synchronously. After that click, capability changes publish a new snapshot for future route resolution but do not replay, cancel, or reroute the active owned turn. The active turn continues against its submitted conversation only while start confirmation, the owned path, first adapter-created user message, and visible assistant surface remain valid; failure terminates it without automatic replay.
 
 ## Dependency direction
 
 ```text
-Phase 2:
-
-apps/bridge --> packages/core
-       |
-       +-----> packages/protocol
-
-Phase 3:
-
 apps/bridge -----------+----> packages/core
 apps/native-host ------+----> packages/protocol
 apps/browser-extension-+
                        +----> packages/native-messaging
 apps/windows-setup ---------> Windows package and registry boundaries
-
-Future Responses integration:
-
-apps/bridge ----------------> packages/responses
 ```
+
+The Responses adapter and DOM I/O remain application-owned because no other application consumes those platform boundaries.
 
 Applications own I/O and platform APIs. Packages contain portable contracts, state machines, and pure policy logic.
 
@@ -103,4 +99,4 @@ Writes are serialized per destination and respect backpressure. Malformed or ove
 
 ## Persistence
 
-The initial implementation keeps bridge-owned routing and conversation correlation in bounded memory. It cannot resume a Web route after the facade restarts. The official Codex child still owns its normal thread storage and may persist a rollout according to the request and Codex configuration. Additional persistent Web conversation state is out of scope until an encrypted, opt-in design is reviewed separately.
+The implementation keeps bridge-owned routing and conversation correlation in bounded memory. It cannot resume a Web route after the facade restarts. The official Codex child still owns its normal thread storage and may persist a rollout according to the request and Codex configuration. ChatGPT may retain the visible conversation according to the user's account settings; the bridge neither persists nor deletes it. Additional bridge-owned persistent Web state is out of scope until an encrypted, opt-in design is reviewed separately.

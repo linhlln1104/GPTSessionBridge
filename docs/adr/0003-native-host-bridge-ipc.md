@@ -76,7 +76,7 @@ Administrator, `SYSTEM`, kernel, browser-compromise, and same-logon-session malw
 - At most one facade per Windows logon session owns browser IPC. Failure to acquire it disables the Web capability for that facade but does not terminate or reroute native Codex traffic.
 - The TypeScript runtime cannot replace the helper with `node:net` without a new security review.
 - A browser session is invalidated whenever the authenticated channel changes or disconnects. Active work terminates exactly once and is never replayed automatically.
-- The app-server Responses stub remains fail-closed until a separate adapter can preserve pinned session and catalog-revision identity without flattening unsupported Responses semantics.
+- The app-server Responses boundary remains fail-closed until a separate adapter can preserve pinned session and catalog-revision identity without flattening unsupported Responses semantics. [ADR 0004](0004-ui-only-chatgpt-web-adapter.md) later accepts and implements that text-only adapter boundary.
 - Unix-domain transport remains future work and must provide an equivalent documented identity and ownership boundary.
 
 ## Rejected alternatives
