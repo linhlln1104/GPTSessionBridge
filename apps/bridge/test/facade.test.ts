@@ -382,6 +382,23 @@ describe("AppServerRouter thread routing", () => {
     expect(router.handleServer(upstream)).toEqual({ envelope: upstream, kind: "forward" });
   });
 
+  it.each([
+    ["inline history", { history: [], threadId: "thread-native-history" }],
+    ["a rollout path", { path: "C:\\synthetic\\rollout.jsonl", threadId: "thread-native-path" }],
+  ] as readonly (readonly [string, JsonObject])[])(
+    "passes through a native resume with %s",
+    (identity, params) => {
+      const router = createRouter();
+      const request = {
+        id: `native-resume:${identity}`,
+        method: "thread/resume",
+        params,
+      } as const;
+
+      expect(router.handleClient(request)).toEqual({ envelope: request, kind: "forward" });
+    },
+  );
+
   it("translates Web model metadata warnings without exposing the private route", () => {
     const router = createRouter();
     router.handleClient({ id: "start", method: "thread/start", params: { model: WEB_MODEL } });

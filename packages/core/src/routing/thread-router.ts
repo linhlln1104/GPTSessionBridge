@@ -152,7 +152,6 @@ export class ThreadRouter {
 
     const params = readOptionalDataRecord(request.params);
     assertNoReservedProviderDefinitions(params);
-    assertSupportedLifecycleIdentity(request.method, params);
     const sourceThreadId = readOptionalString(params?.["threadId"]);
     if (request.method !== "thread/start" && sourceThreadId === null) {
       throw routingError(THREAD_ROUTING_ERROR_CODE.INVALID_PARAMS);
@@ -166,6 +165,7 @@ export class ThreadRouter {
       request.catalogRevision,
     );
     if (decision.kind === "web") {
+      assertSupportedWebLifecycleIdentity(request.method, params);
       assertNoAmbiguousWebConfigTables(params);
     }
     const reservesThreadSlot =
@@ -839,7 +839,7 @@ function readLifecycleModel(params: DataRecord | undefined): string | null {
   return direct ?? configured;
 }
 
-function assertSupportedLifecycleIdentity(
+function assertSupportedWebLifecycleIdentity(
   method: ThreadLifecycleMethod,
   params: DataRecord | undefined,
 ): void {
@@ -853,7 +853,8 @@ function assertSupportedLifecycleIdentity(
   if (
     (method === "thread/resume" || method === "thread/fork") &&
     path !== undefined &&
-    path !== null
+    path !== null &&
+    path !== ""
   ) {
     throw routingError(THREAD_ROUTING_ERROR_CODE.INVALID_PARAMS);
   }

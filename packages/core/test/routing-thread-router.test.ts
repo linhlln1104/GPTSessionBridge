@@ -590,6 +590,23 @@ describe("thread route settlement", () => {
     );
   });
 
+  it.each([
+    ["inline history", { history: [], threadId: "thread-native-history" }],
+    ["a rollout path", { path: "C:\\synthetic\\rollout.jsonl", threadId: "thread-native-path" }],
+  ] as const)("passes through an untracked native resume with %s", (_identity, params) => {
+    const router = createRouter();
+
+    const prepared = router.prepareThreadLifecycle({
+      direction: "client-to-server",
+      id: _identity,
+      method: "thread/resume",
+      params,
+    });
+
+    expect(prepared.route).toBe("native");
+    expect(prepared.params).toBe(params);
+  });
+
   it.each(["thread/resume", "thread/fork"] as const)(
     "requires a source thread identifier for %s",
     (method) => {
@@ -1181,23 +1198,37 @@ describe("thread-bound selection invariants", () => {
       );
     }
 
-    for (const [method, path] of [
-      ["thread/resume", ""],
-      ["thread/fork", ""],
-      ["thread/fork", "synthetic-rollout.jsonl"],
-    ] as const) {
+    for (const method of ["thread/resume", "thread/fork"] as const) {
       expectRoutingError(
         () =>
           router.prepareThreadLifecycle({
             direction: "client-to-server",
-            id: `${method}:${path}`,
+            id: `${method}:synthetic-rollout.jsonl`,
             method,
-            params: { path, threadId: "thread-web" },
+            params: { path: "synthetic-rollout.jsonl", threadId: "thread-web" },
           }),
         THREAD_ROUTING_ERROR_CODE.INVALID_PARAMS,
       );
     }
   });
+
+  it.each(["thread/resume", "thread/fork"] as const)(
+    "treats an empty Web rollout path as absent for %s",
+    (method) => {
+      const router = createRouter();
+      pinWebThread(router);
+
+      const prepared = router.prepareThreadLifecycle({
+        direction: "client-to-server",
+        id: method,
+        method,
+        params: { path: "", threadId: "thread-web" },
+      });
+
+      expect(prepared.route).toBe("web");
+      expect(prepared.params).toMatchObject({ path: "", threadId: "thread-web" });
+    },
+  );
 
   it("rejects unsupported Web reasoning and reserved provider impersonation", () => {
     const router = createRouter();
