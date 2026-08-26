@@ -11,10 +11,12 @@ import {
 } from "@gpt-session-bridge/core/security";
 
 import { BRIDGE_ACTIVE_ENV, BRIDGE_ACTIVE_VALUE, CODEX_EXECUTABLE_ENV } from "./constants.js";
+import { BrowserModelCatalogState } from "./browser/browser-model-catalog.js";
+import { BrowserSessionCoordinator } from "./browser/browser-session-coordinator.js";
 import { AppServerRouter } from "./facade/app-server-router.js";
 import { BidirectionalAppServerProxy } from "./facade/bidirectional-proxy.js";
 import { createDefaultFacadeState } from "./facade/default-state.js";
-import { ResponsesStubServer } from "./http/responses-stub.js";
+import { ResponsesServer } from "./http/responses-server.js";
 import {
   createDefaultBrowserIpcRuntime,
   type BrowserIpcRuntime,
@@ -25,7 +27,7 @@ import { BridgeRuntimeError } from "./runtime/errors.js";
 
 const APP_SERVER_COMMAND = "app-server";
 const DEFAULT_MAX_QUEUED_MESSAGES = 256;
-const DEFAULT_MAX_STUB_CONNECTIONS = 32;
+const DEFAULT_MAX_RESPONSES_CONNECTIONS = 32;
 const FAILURE_EXIT_CODE = 1;
 const SIGINT_EXIT_CODE = 130;
 const SIGTERM_EXIT_CODE = 143;
@@ -245,6 +247,7 @@ export async function runCli(
 
 export interface RunAppServerFacadeOptions {
   readonly args: readonly string[];
+  readonly browserModels?: BrowserModelCatalogState;
   readonly browserIpc?: BrowserIpcRuntime;
   readonly clientInput: Readable;
   readonly clientOutput: Writable;
@@ -257,11 +260,17 @@ export async function runAppServerFacade(options: RunAppServerFacadeOptions): Pr
   assertNoReservedAppServerArguments(options.args);
   const policy = DEFAULT_TRANSPORT_SECURITY_POLICY;
   const token = generateCapabilityToken();
-  const stub = new ResponsesStubServer({
+  const ownsCoordinator = options.browserIpc === undefined;
+  const coordinator = options.browserIpc?.coordinator ?? new BrowserSessionCoordinator();
+  const browserModels = options.browserModels ?? new BrowserModelCatalogState(coordinator);
+  const responses = new ResponsesServer({
+    coordinator,
     headerTimeoutMs: policy.timeout.handshakeMs,
     maxBodyBytes: policy.size.maxFrameBytes,
-    maxConnections: DEFAULT_MAX_STUB_CONNECTIONS,
+    maxConnections: DEFAULT_MAX_RESPONSES_CONNECTIONS,
+    maxOutputBytes: policy.size.maxBufferedBytes,
     requestTimeoutMs: policy.timeout.requestMs,
+    resolveModelRoute: (providerModel) => browserModels.resolveModelRoute(providerModel),
     token,
   });
   const child = new CodexChild({
@@ -302,11 +311,11 @@ export async function runAppServerFacade(options: RunAppServerFacadeOptions): Pr
         await browserIpc.close().catch(() => undefined);
       }
     }
-    const address = await stub.start();
+    const address = await responses.start();
     const childProcess = child.start();
     childStarted = true;
     const childExit = child.waitForExit();
-    const state = createDefaultFacadeState(address.baseUrl, token);
+    const state = createDefaultFacadeState(address.baseUrl, token, browserModels);
     const router = new AppServerRouter({
       ...state,
       onInitializeComplete: () => {
@@ -359,7 +368,10 @@ export async function runAppServerFacade(options: RunAppServerFacadeOptions): Pr
       await options.browserIpc?.close().catch(() => undefined);
       await browserIpcMonitor?.catch(() => undefined);
     }
-    await stub.close();
+    await responses.close();
+    if (ownsCoordinator) {
+      coordinator.close();
+    }
   }
 }
 

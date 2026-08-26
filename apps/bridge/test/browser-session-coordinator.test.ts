@@ -250,6 +250,14 @@ describe("BrowserSessionCoordinator", () => {
         request: turnRequest({ catalogRevision: "catalog-stale" }),
       },
       {
+        code: BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED,
+        request: turnRequest({ sessionGeneration: 2 }),
+      },
+      {
+        code: BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED,
+        request: turnRequest({ sessionId: "session-other" }),
+      },
+      {
         code: BRIDGE_ERROR_CODES.MODEL_UNAVAILABLE,
         request: turnRequest({ modelId: "gptsessionbridge/web/missing" }),
       },
@@ -494,6 +502,33 @@ describe("BrowserSessionCoordinator", () => {
       }),
     );
     await expect(handle.completion).resolves.toMatchObject({ kind: "completed" });
+  });
+
+  it("uses the turn-pinned cancellation capability after a later catalog refresh", async () => {
+    const ready = await readyCoordinator();
+    const handle = ready.coordinator.startTurn(turnRequest());
+    await acknowledgeTurn(ready, handle.turnId);
+
+    await ready.coordinator.receive(
+      ready.lease,
+      frame("capabilities/changed", "event-capabilities-later", {
+        capabilities: capabilities({ cancellation: false, catalogRevision: "catalog-b" }),
+        sessionId: ready.sessionId,
+      }),
+    );
+
+    const cancelling = handle.cancel();
+    expect(messagesOfType(ready.port, "turn/cancel")).toHaveLength(1);
+    await ready.coordinator.receive(
+      ready.lease,
+      frame("turn/cancelled", "event-cancelled-later", {
+        sessionId: ready.sessionId,
+        turnId: handle.turnId,
+      }),
+    );
+
+    await expect(cancelling).resolves.toBeUndefined();
+    await expect(handle.completion).resolves.toEqual({ kind: "cancelled" });
   });
 
   it("settles active work when the browser session disconnects", async () => {
@@ -835,6 +870,8 @@ function turnRequest(
     input: [{ text: "Return a synthetic greeting.", type: "text" }],
     modelId: "gptsessionbridge/web/example-model",
     reasoningEffort: "medium",
+    sessionGeneration: 1,
+    sessionId: "session-1",
     temporary: false,
     ...overrides,
   };

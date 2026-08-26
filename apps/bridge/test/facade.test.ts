@@ -9,25 +9,76 @@ import {
 } from "@gpt-session-bridge/protocol";
 import { describe, expect, it, vi } from "vitest";
 
+import { BrowserModelCatalogState } from "../src/browser/browser-model-catalog.js";
+import type { BrowserCapabilitySnapshot } from "../src/browser/browser-session-coordinator.js";
 import { AppServerRouter, type AppServerDispatch } from "../src/facade/app-server-router.js";
 import { BidirectionalAppServerProxy } from "../src/facade/bidirectional-proxy.js";
 import { createDefaultFacadeState } from "../src/facade/default-state.js";
 
 const BASE_URL = "http://127.0.0.1:43123/v1";
-const WEB_MODEL = "gptsessionbridge/web/example-model";
 const TEST_CAPABILITY_TOKEN = parseCapabilityToken(`gsb_${"A".repeat(43)}`);
+const TEST_BROWSER_MODELS = createBrowserModels();
+const WEB_MODEL = readOnlyWebModel(TEST_BROWSER_MODELS);
+const ROUTE_MODEL = readOnlyRouteModel(TEST_BROWSER_MODELS);
 
 function createRouter(onInitializeComplete?: () => void): AppServerRouter {
-  const state = createDefaultFacadeState(BASE_URL, TEST_CAPABILITY_TOKEN);
+  const state = createDefaultFacadeState(BASE_URL, TEST_CAPABILITY_TOKEN, TEST_BROWSER_MODELS);
   return new AppServerRouter({
     ...state,
     ...(onInitializeComplete === undefined ? {} : { onInitializeComplete }),
   });
 }
 
+function createBrowserModels(): BrowserModelCatalogState {
+  const snapshot: BrowserCapabilitySnapshot = {
+    capabilities: {
+      cancellation: true,
+      catalogRevision: "catalog-test",
+      imageInput: false,
+      modelDiscovery: true,
+      models: [
+        {
+          defaultReasoningEffort: "medium",
+          displayName: "Example Model",
+          id: "example-model",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [
+            {
+              description: "Balanced reasoning",
+              reasoningEffort: "medium",
+            },
+          ],
+        },
+      ],
+      streaming: true,
+      temporaryChat: false,
+      toolCalls: false,
+    },
+    generation: 1,
+    sessionId: "session-test",
+  };
+  return new BrowserModelCatalogState({ snapshot });
+}
+
+function readOnlyRouteModel(models: BrowserModelCatalogState): string {
+  const route = models.listRouteDefinitions()[0];
+  if (route === undefined) {
+    throw new TypeError("Expected a Web model route fixture");
+  }
+  return route.providerModel;
+}
+
+function readOnlyWebModel(models: BrowserModelCatalogState): string {
+  const model = models.listVirtualModels()[0];
+  if (model === undefined) {
+    throw new TypeError("Expected a Web model fixture");
+  }
+  return model.publicKey;
+}
+
 function webThreadResult(threadId: string): JsonObject {
   return {
-    model: WEB_MODEL,
+    model: ROUTE_MODEL,
     modelProvider: WEB_MODEL_PROVIDER_ID,
     reasoningEffort: "medium",
     thread: { id: threadId, modelProvider: WEB_MODEL_PROVIDER_ID },
@@ -206,7 +257,7 @@ describe("AppServerRouter thread routing", () => {
 
     expect(startParams).toMatchObject({
       allowProviderModelFallback: false,
-      model: WEB_MODEL,
+      model: ROUTE_MODEL,
       modelProvider: WEB_MODEL_PROVIDER_ID,
     });
     expect(config).toMatchObject({
@@ -219,18 +270,18 @@ describe("AppServerRouter thread routing", () => {
       [`${providerPrefix}.stream_max_retries`]: 0,
       [`${providerPrefix}.wire_api`]: "responses",
     });
-    expect(
-      router.handleServer({
-        id: "start",
-        result: webThreadResult("thread-web"),
-      }).kind,
-    ).toBe("forward");
+    const upstreamResult = webThreadResult("thread-web");
+    const started = router.handleServer({ id: "start", result: upstreamResult });
+    expect(started.kind).toBe("forward");
+    expect(readResult(started)["model"]).toBe(WEB_MODEL);
+    expect(JSON.stringify(started)).not.toContain(ROUTE_MODEL);
+    expect(upstreamResult["model"]).toBe(ROUTE_MODEL);
     const turn = router.handleClient({
       id: "turn",
       method: "turn/start",
       params: { input: [{ text: "synthetic", type: "input_text" }], threadId: "thread-web" },
     });
-    expect(readParams(turn)).toMatchObject({ effort: "medium", model: WEB_MODEL });
+    expect(readParams(turn)).toMatchObject({ effort: "medium", model: ROUTE_MODEL });
 
     const switched = router.handleClient({
       id: "switch",
@@ -256,6 +307,198 @@ describe("AppServerRouter thread routing", () => {
     });
   });
 
+  it("fails closed when a committed lifecycle result echoes a private route elsewhere", () => {
+    const router = createRouter();
+    router.handleClient({ id: "start", method: "thread/start", params: { model: WEB_MODEL } });
+
+    expect(() =>
+      router.handleServer({
+        id: "start",
+        result: { ...webThreadResult("thread-web"), upstreamDiagnostic: ROUTE_MODEL },
+      }),
+    ).toThrow(expect.objectContaining({ code: "routing.invalid_upstream_result" }));
+  });
+
+  it.each([TEST_CAPABILITY_TOKEN, BASE_URL])(
+    "fails closed when a committed lifecycle result echoes private provider material",
+    (privateValue) => {
+      const router = createRouter();
+      router.handleClient({ id: "start", method: "thread/start", params: { model: WEB_MODEL } });
+
+      expect(() =>
+        router.handleServer({
+          id: "start",
+          result: { ...webThreadResult("thread-web"), upstreamDiagnostic: privateValue },
+        }),
+      ).toThrow(expect.objectContaining({ code: "routing.invalid_upstream_result" }));
+    },
+  );
+
+  it("replaces Web lifecycle errors without exposing injected routing configuration", () => {
+    const router = createRouter();
+    router.handleClient({ id: "start", method: "thread/start", params: { model: WEB_MODEL } });
+    const upstream = {
+      error: {
+        code: -32000,
+        data: {
+          capability: TEST_CAPABILITY_TOKEN,
+          providerModel: ROUTE_MODEL,
+        },
+        message: `provider failed for ${ROUTE_MODEL}`,
+      },
+      id: "start",
+    } as const;
+
+    const dispatched = router.handleServer(upstream);
+
+    expect(dispatched).toEqual({
+      envelope: {
+        error: {
+          code: -32603,
+          data: { bridgeCode: "routing.web_lifecycle_failed" },
+          message: "GPTSessionBridge could not validate the upstream response.",
+        },
+        id: "start",
+      },
+      kind: "forward",
+    });
+    expect(JSON.stringify(dispatched)).not.toContain(ROUTE_MODEL);
+    expect(JSON.stringify(dispatched)).not.toContain(TEST_CAPABILITY_TOKEN);
+    expect(upstream.error.data.providerModel).toBe(ROUTE_MODEL);
+  });
+
+  it("preserves native lifecycle errors", () => {
+    const router = createRouter();
+    router.handleClient({ id: "start", method: "thread/start", params: { model: "native-model" } });
+    const upstream = {
+      error: {
+        code: -32000,
+        data: { diagnostic: "native detail" },
+        message: "native provider failed",
+      },
+      id: "start",
+    } as const;
+
+    expect(router.handleServer(upstream)).toEqual({ envelope: upstream, kind: "forward" });
+  });
+
+  it("translates Web model metadata warnings without exposing the private route", () => {
+    const router = createRouter();
+    router.handleClient({ id: "start", method: "thread/start", params: { model: WEB_MODEL } });
+    router.handleServer({ id: "start", result: webThreadResult("thread-web") });
+    const warning = {
+      emittedAtMs: 1_787_714_618_878,
+      method: "warning",
+      params: {
+        message: `Model metadata for \`${ROUTE_MODEL}\` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.`,
+        threadId: "thread-web",
+      },
+    } as const;
+
+    const dispatched = router.handleServer(warning);
+
+    expect(dispatched).toEqual({
+      envelope: {
+        emittedAtMs: warning.emittedAtMs,
+        method: "warning",
+        params: {
+          message: "GPTSessionBridge is using compatibility metadata for the selected Web model.",
+          threadId: "thread-web",
+        },
+      },
+      kind: "forward",
+    });
+    expect(JSON.stringify(dispatched)).not.toContain(ROUTE_MODEL);
+  });
+
+  it.each([
+    appServerEnvelopeSchema.parse({
+      method: "error",
+      params: {
+        error: {
+          additionalDetails: TEST_CAPABILITY_TOKEN,
+          codexErrorInfo: "other",
+          message: `unexpected status from ${BASE_URL}/responses`,
+        },
+        threadId: "thread-web",
+        turnId: "turn-web",
+        willRetry: false,
+      },
+    }),
+    appServerEnvelopeSchema.parse({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-web",
+        turn: {
+          error: {
+            additionalDetails: TEST_CAPABILITY_TOKEN,
+            codexErrorInfo: "other",
+            message: `unexpected status from ${BASE_URL}/responses`,
+          },
+          id: "turn-web",
+          items: [],
+          status: "failed",
+        },
+      },
+    }),
+  ])("replaces Web turn failure notifications with content-free errors", (notification) => {
+    const router = createRouter();
+    router.handleClient({ id: "start", method: "thread/start", params: { model: WEB_MODEL } });
+    router.handleServer({ id: "start", result: webThreadResult("thread-web") });
+
+    const dispatched = router.handleServer(notification);
+
+    expect(dispatched.kind).toBe("forward");
+    expect(JSON.stringify(dispatched)).toContain("GPTSessionBridge Web turn failed.");
+    expect(JSON.stringify(dispatched)).not.toContain(BASE_URL);
+    expect(JSON.stringify(dispatched)).not.toContain(TEST_CAPABILITY_TOKEN);
+  });
+
+  it("preserves native model warnings", () => {
+    const router = createRouter();
+    router.handleClient({ id: "start", method: "thread/start", params: { model: "native-model" } });
+    router.handleServer({
+      id: "start",
+      result: {
+        model: "native-model",
+        modelProvider: "native-provider",
+        reasoningEffort: "medium",
+        thread: { id: "thread-native", modelProvider: "native-provider" },
+      },
+    });
+    const warning = {
+      method: "warning",
+      params: { message: "native model warning", threadId: "thread-native" },
+    } as const;
+
+    expect(router.handleServer(warning)).toEqual({ envelope: warning, kind: "forward" });
+  });
+
+  it("preserves native turn error notifications", () => {
+    const router = createRouter();
+    router.handleClient({ id: "start", method: "thread/start", params: { model: "native-model" } });
+    router.handleServer({
+      id: "start",
+      result: {
+        model: "native-model",
+        modelProvider: "native-provider",
+        reasoningEffort: "medium",
+        thread: { id: "thread-native", modelProvider: "native-provider" },
+      },
+    });
+    const notification = {
+      method: "error",
+      params: {
+        error: { message: "native provider detail" },
+        threadId: "thread-native",
+        turnId: "turn-native",
+        willRetry: false,
+      },
+    } as const;
+
+    expect(router.handleServer(notification)).toEqual({ envelope: notification, kind: "forward" });
+  });
+
   it("applies routing guards to client notifications", () => {
     const router = createRouter();
     const initialized = { method: "initialized" } as const;
@@ -279,7 +522,7 @@ describe("AppServerRouter thread routing", () => {
     expect(turn.kind).toBe("forward");
     expect(readParams(turn)).toMatchObject({
       effort: "medium",
-      model: WEB_MODEL,
+      model: ROUTE_MODEL,
       threadId: "thread-web",
     });
     expect(
@@ -513,7 +756,7 @@ describe("AppServerRouter thread routing", () => {
       params: { threadId: "thread-web" },
     });
     expect(readParams(resume)).toMatchObject({
-      model: WEB_MODEL,
+      model: ROUTE_MODEL,
       modelProvider: WEB_MODEL_PROVIDER_ID,
       threadId: "thread-web",
     });
@@ -610,6 +853,46 @@ describe("BidirectionalAppServerProxy", () => {
       result: { data: { id: string }[] };
     };
     expect(response.result.data.map((model) => model.id)).toEqual(["native-model", WEB_MODEL]);
+
+    const forwardedStartPromise = readJsonLine(serverInput);
+    clientInput.write(
+      `${JSON.stringify({ id: "start", method: "thread/start", params: { model: WEB_MODEL } })}\n`,
+    );
+    const forwardedStart = forwardedStartPromise.then((envelope) => {
+      if (!("params" in envelope)) {
+        throw new TypeError("Expected forwarded lifecycle request");
+      }
+      return envelope.params as Record<string, unknown>;
+    });
+    await expect(forwardedStart).resolves.toMatchObject({ model: ROUTE_MODEL });
+
+    const publicStartPromise = readJsonLine(clientOutput);
+    serverOutput.write(
+      `${JSON.stringify({ id: "start", result: webThreadResult("thread-web") })}\n`,
+    );
+    const publicStart = await publicStartPromise;
+    expect(publicStart).toMatchObject({ id: "start", result: { model: WEB_MODEL } });
+    expect(JSON.stringify(publicStart)).not.toContain(ROUTE_MODEL);
+
+    const publicWarningPromise = readJsonLine(clientOutput);
+    serverOutput.write(
+      `${JSON.stringify({
+        method: "warning",
+        params: {
+          message: `Model metadata for \`${ROUTE_MODEL}\` not found.`,
+          threadId: "thread-web",
+        },
+      })}\n`,
+    );
+    const publicWarning = await publicWarningPromise;
+    expect(publicWarning).toMatchObject({
+      method: "warning",
+      params: {
+        message: "GPTSessionBridge is using compatibility metadata for the selected Web model.",
+        threadId: "thread-web",
+      },
+    });
+    expect(JSON.stringify(publicWarning)).not.toContain(ROUTE_MODEL);
 
     clientInput.end();
     await expect(completion).resolves.toBe("client-ended");

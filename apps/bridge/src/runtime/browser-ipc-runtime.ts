@@ -9,6 +9,7 @@ import { WindowsBrowserIpcBroker } from "./windows-browser-ipc-broker.js";
 
 export interface BrowserIpcRuntime {
   readonly completion: Promise<void>;
+  readonly coordinator: BrowserSessionCoordinator;
   close(): Promise<void>;
   start(): Promise<void>;
 }
@@ -36,8 +37,9 @@ export function createDefaultBrowserIpcRuntime(
     }
     throw error;
   }
+  const coordinator = new BrowserSessionCoordinator();
   return new WindowsBrowserIpcBroker({
-    coordinator: new BrowserSessionCoordinator(),
+    coordinator,
     helperExecutable,
     implementationVersion: BRIDGE_IMPLEMENTATION_VERSION,
   });

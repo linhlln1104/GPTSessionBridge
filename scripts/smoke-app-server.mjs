@@ -5,7 +5,7 @@ import { TextDecoder } from "node:util";
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
-const SYNTHETIC_MODEL_ID = "gptsessionbridge/web/example-model";
+const WEB_MODEL_PREFIX = "gptsessionbridge/web/";
 const bridgeCli = fileURLToPath(new URL("../apps/bridge/dist/cli.js", import.meta.url));
 
 async function main() {
@@ -189,11 +189,13 @@ async function main() {
         throw new Error("model catalog exceeded the smoke-test page limit");
       }
     }
-    const webModels = models.filter((model) => model.id === SYNTHETIC_MODEL_ID);
-    if (webModels.length !== 1 || !hasCurrentModelContract(webModels[0])) {
-      throw new Error("synthetic model contract mismatch");
+    const webModels = models.filter(
+      (model) => typeof model.id === "string" && model.id.startsWith(WEB_MODEL_PREFIX),
+    );
+    if (webModels.length !== 0) {
+      throw new Error("disconnected browser catalog must be empty");
     }
-    smokeSummary = `app-server smoke: ok nativeModels=${models.length - 1} webModels=1 contract=ok stderrBytes=${stderrBytes}\n`;
+    smokeSummary = `app-server smoke: ok nativeModels=${models.length} webModels=0 disconnectedCatalog=ok stderrBytes=${stderrBytes}\n`;
   } finally {
     shuttingDown = true;
     if (!child.stdin.destroyed && !child.stdin.writableEnded) {
@@ -223,26 +225,6 @@ function readModelPage(response) {
     throw new Error("invalid model/list cursor");
   }
   return { models: response.result.data, nextCursor };
-}
-
-function hasCurrentModelContract(model) {
-  return (
-    model.id === SYNTHETIC_MODEL_ID &&
-    model.model === SYNTHETIC_MODEL_ID &&
-    model.hidden === false &&
-    model.isDefault === false &&
-    model.upgrade === null &&
-    model.upgradeInfo === null &&
-    model.availabilityNux === null &&
-    model.modelSpecialty === null &&
-    model.multiAgentVersion === null &&
-    model.defaultServiceTier === null &&
-    Array.isArray(model.inputModalities) &&
-    model.inputModalities.length === 1 &&
-    model.inputModalities[0] === "text" &&
-    Array.isArray(model.additionalSpeedTiers) &&
-    Array.isArray(model.serviceTiers)
-  );
 }
 
 function isRecord(value) {

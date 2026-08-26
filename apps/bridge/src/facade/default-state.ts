@@ -1,11 +1,10 @@
 import { randomBytes } from "node:crypto";
 
-import {
-  SYNTHETIC_WEB_CATALOG_REVISION,
-  VirtualModelCatalog,
-} from "@gpt-session-bridge/core/catalog";
-import { ThreadRouter } from "@gpt-session-bridge/core/routing";
+import { VirtualModelCatalog } from "@gpt-session-bridge/core/catalog";
+import { ExactVirtualModelRegistry, ThreadRouter } from "@gpt-session-bridge/core/routing";
 import type { CapabilityToken } from "@gpt-session-bridge/core/security";
+
+import type { BrowserModelCatalogState } from "../browser/browser-model-catalog.js";
 
 export interface DefaultFacadeState {
   readonly catalog: VirtualModelCatalog;
@@ -15,6 +14,7 @@ export interface DefaultFacadeState {
 export function createDefaultFacadeState(
   baseUrl: string,
   capabilityToken: CapabilityToken,
+  browserModels: BrowserModelCatalogState,
 ): DefaultFacadeState {
   const catalog = new VirtualModelCatalog({
     cursorStore: {
@@ -23,19 +23,12 @@ export function createDefaultFacadeState(
       random: () => randomBytes(24).toString("base64url"),
       ttlMs: 300_000,
     },
+    virtualModelSource: () => browserModels.listVirtualModels(),
   });
   const threadRouter = new ThreadRouter({
     baseUrl,
     capabilityToken,
-    models: catalog.listVirtualModels().map((model) => ({
-      catalogRevision: SYNTHETIC_WEB_CATALOG_REVISION,
-      defaultReasoningEffort: model.defaultReasoningEffort,
-      providerModel: model.model,
-      publicModel: model.id,
-      supportedReasoningEfforts: model.supportedReasoningEfforts.map(
-        (option) => option.reasoningEffort,
-      ),
-    })),
+    models: new ExactVirtualModelRegistry(() => browserModels.listRouteDefinitions(), 128),
   });
 
   return Object.freeze({ catalog, threadRouter });

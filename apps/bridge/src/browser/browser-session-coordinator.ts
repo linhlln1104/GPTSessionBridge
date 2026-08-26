@@ -54,6 +54,8 @@ export interface BrowserTurnRequest {
   readonly input: NativeMessagingFrameOf<"turn/start">["payload"]["input"];
   readonly modelId: string;
   readonly reasoningEffort: string;
+  readonly sessionGeneration: number;
+  readonly sessionId: string;
   readonly temporary: boolean;
 }
 
@@ -154,6 +156,7 @@ interface DisconnectAttempt {
 }
 
 interface ActiveTurn {
+  readonly cancellationSupported: boolean;
   cancelAttempt?: {
     readonly deferred: Deferred<undefined>;
     readonly previousPhase: BrowserTurnPhase;
@@ -443,6 +446,16 @@ export class BrowserSessionCoordinator {
       );
     }
 
+    if (
+      request.sessionId !== snapshot.sessionId ||
+      request.sessionGeneration !== snapshot.generation
+    ) {
+      throw createBrowserSessionError(
+        BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED,
+        "The selected browser session is stale.",
+        true,
+      );
+    }
     this.#assertTurnCapabilities(snapshot.capabilities, request);
     const requestId = this.#createIdentifier("request");
     const turnId = this.#createIdentifier("turn");
@@ -470,6 +483,7 @@ export class BrowserSessionCoordinator {
     }
 
     const active: ActiveTurn = {
+      cancellationSupported: snapshot.capabilities.cancellation,
       completion: createDeferred<BrowserTurnTerminal>(),
       phase: "starting",
       sessionId: snapshot.sessionId,
@@ -879,7 +893,7 @@ export class BrowserSessionCoordinator {
       if (active.cancelAttempt !== undefined) {
         return active.cancelAttempt.deferred.promise;
       }
-      if (this.#snapshot?.capabilities.cancellation !== true) {
+      if (!active.cancellationSupported) {
         throw createBrowserSessionError(
           BRIDGE_ERROR_CODES.CAPABILITY_UNSUPPORTED,
           "The connected browser session does not support cancellation.",
@@ -940,7 +954,7 @@ export class BrowserSessionCoordinator {
       return;
     }
     delete active.turnTimer;
-    if (this.#snapshot?.capabilities.cancellation !== true || active.cancelAttempt !== undefined) {
+    if (!active.cancellationSupported || active.cancelAttempt !== undefined) {
       this.#teardownTransport(
         createBrowserSessionError(
           BRIDGE_ERROR_CODES.TRANSPORT_TIMEOUT,

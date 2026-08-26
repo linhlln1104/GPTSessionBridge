@@ -10,6 +10,7 @@ import {
   WEB_MODEL_PROVIDER_ID,
   serializeDirectionalRequestId,
   type AppServerRequestId,
+  type PinnedThreadRoute,
   type ThreadBoundMethod,
   type ThreadLifecycleMethod,
   type ThreadRouter,
@@ -54,7 +55,7 @@ const THREAD_BOUND_METHODS = new Set<ThreadBoundMethod>(["thread/settings/update
 const CONFIG_MUTATION_METHODS = new Set(["config/batchWrite", "config/value/write"]);
 const UNSUPPORTED_WEB_METHODS = new Set(["turn/steer"]);
 const REQUEST_ONLY_METHODS = new Set(["initialize", "model/list", ...THREAD_LIFECYCLE_METHODS]);
-const MAX_CONFIG_MUTATION_NODES = 16_384;
+const MAX_ROUTER_SCAN_NODES = 16_384;
 
 export class AppServerRouter {
   readonly #catalog: VirtualModelCatalog;
@@ -251,8 +252,20 @@ export class AppServerRouter {
         } catch (error) {
           throw new FacadeIntegrityError(errorCode(error));
         }
-        if (settlement.status === "committed" || settlement.status === "failed") {
+        if (settlement.status === "committed") {
+          if (settlement.route.kind === "web") {
+            const sanitized = sanitizeWebLifecycleResponse(envelope, settlement.route);
+            if (this.#threadRouter.containsPrivateProviderMaterial(sanitized)) {
+              throw new FacadeIntegrityError("routing.invalid_upstream_result");
+            }
+            return forward(sanitized);
+          }
           return forward(envelope);
+        }
+        if (settlement.status === "failed") {
+          return settlement.route === "web"
+            ? forward(internalFailure(envelope.id, "routing.web_lifecycle_failed"))
+            : forward(envelope);
         }
         throw new FacadeIntegrityError("routing.invalid_upstream_result");
       } catch (error) {
@@ -268,13 +281,34 @@ export class AppServerRouter {
       if (relation !== undefined) {
         this.#threadRouter.validateThreadRelation(relation);
       }
-    } else if (envelope.method === "thread/deleted") {
-      const threadId = readNotificationThreadId(envelope.params);
-      if (threadId !== undefined) {
-        this.#threadRouter.forgetThread(threadId);
-      }
     }
-    return forward(envelope);
+    const threadId = readNotificationThreadId(envelope.params);
+    const route = threadId === undefined ? undefined : this.#threadRouter.getThreadRoute(threadId);
+    if (envelope.method === "thread/deleted" && threadId !== undefined) {
+      this.#threadRouter.forgetThread(threadId);
+    }
+    if (route?.kind !== "web" || route.providerModel === null) {
+      return forward(envelope);
+    }
+
+    let sanitized = sanitizeWebTurnFailureNotification(envelope);
+    if (
+      envelope.method === "warning" &&
+      (containsPrivateRoute(envelope, route.providerModel) ||
+        this.#threadRouter.containsPrivateProviderMaterial(envelope))
+    ) {
+      sanitized = withNotificationParams(envelope, {
+        message: "GPTSessionBridge is using compatibility metadata for the selected Web model.",
+        threadId,
+      });
+    }
+    if (
+      containsPrivateRoute(sanitized, route.providerModel) ||
+      this.#threadRouter.containsPrivateProviderMaterial(sanitized)
+    ) {
+      return drop();
+    }
+    return forward(sanitized);
   }
 
   public clearPending(): void {
@@ -369,7 +403,7 @@ function assertNoReservedConfigMutation(value: unknown): void {
   let inspected = 0;
   while (pending.length > 0) {
     inspected += 1;
-    if (inspected > MAX_CONFIG_MUTATION_NODES) {
+    if (inspected > MAX_ROUTER_SCAN_NODES) {
       throw new FacadeRoutingError("routing.reserved_configuration");
     }
     const current = pending.pop();
@@ -450,6 +484,93 @@ function withNotificationParams(
     candidate["params"] = jsonValueSchema.parse(params);
   }
   return appServerNotificationSchema.parse(candidate);
+}
+
+function sanitizeWebLifecycleResponse(
+  response: AppServerEnvelope,
+  route: PinnedThreadRoute,
+): AppServerEnvelope {
+  if (
+    route.kind !== "web" ||
+    route.model === null ||
+    route.providerModel === null ||
+    !("result" in response) ||
+    !isDataRecord(response.result) ||
+    response.result["model"] !== route.providerModel
+  ) {
+    throw new FacadeIntegrityError("routing.invalid_upstream_result");
+  }
+
+  const result = jsonValueSchema.parse({ ...response.result, model: route.model });
+  const sanitized = appServerSuccessResponseSchema.parse({ ...response, result });
+  if (containsPrivateRoute(sanitized, route.providerModel)) {
+    throw new FacadeIntegrityError("routing.invalid_upstream_result");
+  }
+  return sanitized;
+}
+
+function sanitizeWebTurnFailureNotification(
+  notification: AppServerNotification,
+): AppServerNotification {
+  if (notification.method === "error" && isDataRecord(notification.params)) {
+    return withNotificationParams(notification, {
+      ...notification.params,
+      error: contentFreeWebTurnError(),
+    });
+  }
+  if (notification.method !== "turn/completed" || !isDataRecord(notification.params)) {
+    return notification;
+  }
+  const turn = notification.params["turn"];
+  if (!isDataRecord(turn) || turn["status"] !== "failed") {
+    return notification;
+  }
+  return withNotificationParams(notification, {
+    ...notification.params,
+    turn: {
+      ...turn,
+      error: contentFreeWebTurnError(),
+    },
+  });
+}
+
+function contentFreeWebTurnError(): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    additionalDetails: null,
+    codexErrorInfo: "other",
+    message: "GPTSessionBridge Web turn failed.",
+  });
+}
+
+function containsPrivateRoute(value: unknown, providerModel: string): boolean {
+  const pending: unknown[] = [value];
+  let inspected = 0;
+  while (pending.length > 0) {
+    inspected += 1;
+    if (inspected > MAX_ROUTER_SCAN_NODES) {
+      throw new FacadeIntegrityError("routing.invalid_upstream_result");
+    }
+    const current = pending.pop();
+    if (typeof current === "string") {
+      if (current.includes(providerModel)) {
+        return true;
+      }
+      continue;
+    }
+    if (isUnknownArray(current)) {
+      pending.push(...current);
+      continue;
+    }
+    if (isDataRecord(current)) {
+      for (const [key, nested] of Object.entries(current)) {
+        if (key.includes(providerModel)) {
+          return true;
+        }
+        pending.push(nested);
+      }
+    }
+  }
+  return false;
 }
 
 function routingFailure(id: AppServerRequestId, error: unknown): AppServerErrorResponse {

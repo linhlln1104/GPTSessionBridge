@@ -5,6 +5,11 @@ import { appServerEnvelopeSchema, type AppServerEnvelope } from "@gpt-session-br
 import { describe, expect, it } from "vitest";
 
 import { isAppServerInvocation, runAppServerFacade, runCli } from "../src/cli.js";
+import { BrowserModelCatalogState } from "../src/browser/browser-model-catalog.js";
+import {
+  BrowserSessionCoordinator,
+  type BrowserCapabilitySnapshot,
+} from "../src/browser/browser-session-coordinator.js";
 import { BRIDGE_ACTIVE_ENV, BRIDGE_ACTIVE_VALUE, CODEX_EXECUTABLE_ENV } from "../src/constants.js";
 import type { BrowserIpcRuntime } from "../src/runtime/browser-ipc-runtime.js";
 
@@ -86,6 +91,13 @@ describe("CLI command routing", () => {
 
   it.each([
     [["--model", "gptsessionbridge/web/example-model", "app-server"]],
+    [
+      [
+        "--model",
+        "gptsessionbridge/web/route-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "app-server",
+      ],
+    ],
     [["--model=gptsessionbridge/web/example-model", "app-server"]],
     [["-mgptsessionbridge/web/example-model", "app-server"]],
     [["-c", 'model_provider="gptsessionbridge_web"', "app-server"]],
@@ -120,9 +132,15 @@ describe("app-server facade runtime", () => {
     const clientOutput = new PassThrough();
     const outputFrames = readFrames(clientOutput, 3);
     const browserIpc = new FakeBrowserIpcRuntime();
+    const browserModels = createBrowserModels();
+    const webModel = browserModels.listVirtualModels()[0];
+    if (webModel === undefined) {
+      throw new TypeError("Expected a Web model fixture");
+    }
     const completion = runAppServerFacade({
       args: [FAKE_APP_SERVER, "app-server"],
       browserIpc,
+      browserModels,
       clientInput,
       clientOutput,
       env: minimalChildEnvironment(),
@@ -136,20 +154,18 @@ describe("app-server facade runtime", () => {
       `${JSON.stringify({
         id: 3,
         method: "thread/start",
-        params: { model: "gptsessionbridge/web/example-model" },
+        params: { model: webModel.publicKey },
       })}\n`,
     );
 
     const frames = await outputFrames;
     const modelResult = readResult(frames[1]);
     const modelData = modelResult["data"] as { id: string }[];
-    expect(modelData.map((model) => model.id)).toEqual([
-      "native-model",
-      "gptsessionbridge/web/example-model",
-    ]);
+    expect(modelData.map((model) => model.id)).toEqual(["native-model", webModel.publicKey]);
     expect(readResult(frames[2])).toMatchObject({
       capabilityInEnvironment: false,
       loopbackProxyBypassConfigured: true,
+      model: webModel.publicKey,
       preexistingProxyBypassPreserved: true,
       providerConfigured: true,
       proxyRespectDisabled: true,
@@ -157,6 +173,7 @@ describe("app-server facade runtime", () => {
       unexpectedBridgeControlEnvironment: false,
     });
     expect(JSON.stringify(frames)).not.toContain("gsb_");
+    expect(JSON.stringify(frames)).not.toContain("gptsessionbridge/web/route-v1-");
 
     clientInput.end();
     await expect(completion).resolves.toBe(0);
@@ -224,6 +241,7 @@ class FakeBrowserIpcRuntime implements BrowserIpcRuntime {
   public startCount = 0;
   public startError: Error | undefined;
   public readonly completion: Promise<void>;
+  public readonly coordinator = new BrowserSessionCoordinator();
   public readonly started: Promise<void>;
   readonly #rejectCompletion: (error: Error) => void;
   readonly #resolveCompletion: () => void;
@@ -258,6 +276,7 @@ class FakeBrowserIpcRuntime implements BrowserIpcRuntime {
       return Promise.resolve();
     }
     this.#closed = true;
+    this.coordinator.close();
     this.closeCount += 1;
     this.#resolveCompletion();
     return Promise.resolve();
@@ -272,6 +291,37 @@ class FakeBrowserIpcRuntime implements BrowserIpcRuntime {
     this.#resolveStarted();
     return this.startError === undefined ? Promise.resolve() : Promise.reject(this.startError);
   }
+}
+
+function createBrowserModels(): BrowserModelCatalogState {
+  const snapshot: BrowserCapabilitySnapshot = {
+    capabilities: {
+      cancellation: true,
+      catalogRevision: "catalog-a",
+      imageInput: false,
+      modelDiscovery: true,
+      models: [
+        {
+          defaultReasoningEffort: "medium",
+          displayName: "Web Model",
+          id: "web-model",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [
+            {
+              description: "Balanced reasoning",
+              reasoningEffort: "medium",
+            },
+          ],
+        },
+      ],
+      streaming: true,
+      temporaryChat: false,
+      toolCalls: false,
+    },
+    generation: 1,
+    sessionId: "session-a",
+  };
+  return new BrowserModelCatalogState({ snapshot });
 }
 
 function minimalChildEnvironment(): Readonly<NodeJS.ProcessEnv> {

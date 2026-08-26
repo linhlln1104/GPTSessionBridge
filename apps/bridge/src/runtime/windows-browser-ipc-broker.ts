@@ -96,6 +96,10 @@ export class WindowsBrowserIpcBroker {
     return this.#completion;
   }
 
+  public get coordinator(): BrowserSessionCoordinator {
+    return this.#coordinator;
+  }
+
   public get state(): WindowsBrowserIpcBrokerState {
     return this.#state;
   }
