@@ -1,6 +1,6 @@
 # Security Policy
 
-GPTSessionBridge is pre-alpha and has not received an independent security audit. The facade, authenticated Windows IPC, browser-session coordinator, Native Messaging runtime, UI-only explicit-tab adapter, strict text-only Responses integration, and unsigned per-user Windows development package are implemented and tested with synthetic fixtures. Protected production installation, code signing, Codex tool-call support, and real-account certification are not. The `main` branch is the only supported development line. No release should be treated as production-ready until this policy explicitly says otherwise.
+GPTSessionBridge is pre-alpha and has not received an independent security audit. The facade, authenticated Windows IPC, browser-session coordinator, Native Messaging runtime, UI-only explicit-tab adapter, strict text-only Responses integration, direct synthetic Chrome DOM fixture, and unsigned per-user Windows development package are implemented. Protocol v2 currently consists only of an accepted activation-gated design and an isolated strict envelope codec. Protected production installation, code signing, Codex tool-call runtime support, packaged-extension E2E, and real-account certification are not implemented. The `main` branch is the only supported development line. No release should be treated as production-ready until this policy explicitly says otherwise.
 
 ## Reporting a vulnerability
 
@@ -36,6 +36,9 @@ Include only the minimum synthetic reproduction needed to understand the problem
 - The capability is injected directly into the in-memory app-server configuration sent to the official Codex child for a Web-backed thread. The official Codex child is therefore inside the trusted boundary.
 - Protocol mismatches, disconnected sessions, and unavailable models fail closed.
 - The Responses endpoint accepts exactly one bounded user text item preserved by browser protocol v1. Multiple messages or parts, tools, images, instructions, non-user roles, structured output, chaining, and persistence requests are rejected rather than joined, removed, or reinterpreted.
+- Protocol v2 schemas and its visible-envelope codec are not part of the active Native Messaging or Responses unions. Protocol v1 continues to advertise `toolCalls: false`, and no Web Agent model is published.
+- A future v2 assistant envelope is an untrusted model proposal. Its round challenge can reject stale, cross-round, or replayed output, but it cannot authenticate the model response or prevent prompt injection because the challenge is visible to the model.
+- Tool execution, approval, and sandbox authority must remain with the official Codex child. The bridge must not execute a parsed proposal, answer an approval request, or weaken the configured sandbox floor itself.
 - Provider selection never falls back silently.
 - Failure to acquire the optional browser IPC listener does not disable native Codex traffic; Web routes remain unavailable and are never redirected to Codex usage.
 - Client-supplied definitions and persistent config writes for the reserved Web provider or model namespace are rejected instead of merged or trusted.
@@ -47,7 +50,7 @@ Include only the minimum synthetic reproduction needed to understand the problem
 - Runtime diagnostics exclude prompts, responses, browser content, paths, configuration payloads, and credentials. The interactive setup CLI returns only the installed artifact paths required to load or inspect the development package.
 - The bridge does not add persistent storage for Web route metadata or conversation content, and telemetry is disabled by default. The official Codex child remains responsible for its normal thread storage according to the request and Codex configuration.
 
-In the current runtime, a supported plain-text Responses request can reach the explicitly selected ChatGPT tab and stream visible assistant text. A request without a connected tab returns `session_not_connected`; stale catalogs and unsupported semantics return explicit errors. Normal Codex coding requests include developer or tool semantics outside this text-only contract and fail closed. The facade must not simulate tool calls, select another model, replay a prompt, or route the request to native Codex.
+In the current runtime, a supported plain-text Responses request can reach the explicitly selected ChatGPT tab and stream visible assistant text. A request without a connected tab returns `session_not_connected`; stale catalogs and unsupported semantics return explicit errors. Normal Codex coding requests include developer or tool semantics outside this text-only contract and fail closed. The v2 codec cannot be reached from that path. The facade must not simulate tool calls, select another model, replay a prompt, or route the request to native Codex.
 
 The unsigned development package is writable by the current user and does not establish executable identity against another process already running as that user. Same-user registry mutation cannot be made transactional through `reg.exe` and remains outside this trust boundary. Production distribution requires a protected installation location, reserved release extension/host identities, code signing, and a separately reviewed installer.
 

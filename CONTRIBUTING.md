@@ -4,12 +4,14 @@ GPTSessionBridge is security-sensitive software. Contributions should be small, 
 
 ## Set up the workspace
 
-Install Node.js 24 and enable Corepack, then run:
+Install Node.js 24, enable Corepack, and install Google Chrome Stable 151 or newer for the direct DOM-runtime gate, then run:
 
 ```shell
 corepack pnpm install
 corepack pnpm verify
 ```
+
+`test:chrome-dom` launches Chrome against a synthetic local document. Fixtures must never visit ChatGPT, reuse a browser profile, or depend on a signed-in account.
 
 Do not disable strict peer-dependency or engine checks to make a local installation pass.
 

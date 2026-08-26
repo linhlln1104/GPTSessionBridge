@@ -18,13 +18,14 @@ The Codex app-server command and some transports are documented as experimental.
 
 No production compatibility is declared during pre-alpha development.
 
-The following development snapshot was tested on 2026-08-25:
+The following development snapshot was tested on 2026-08-26:
 
 | Component        | Tested value        | Scope                                                               |
 | ---------------- | ------------------- | ------------------------------------------------------------------- |
 | Operating system | Windows x64         | Facade, Responses provider, pipe helper, SEA package, and setup CLI |
 | Codex CLI        | `0.149.0-alpha.4.3` | Official `codex app-server` child                                   |
 | Node.js          | `24.18.1`           | Workspace build, tests, facade, and smoke test                      |
+| Google Chrome    | `151.0.7922.174`    | Direct production-driver DOM runtime against a synthetic local page |
 | .NET SDK         | `10.0.301`          | Helper build, tests, formatting, audit, and single-file publish     |
 
 Verified behavior in this snapshot:
@@ -35,12 +36,13 @@ Verified behavior in this snapshot:
 - Automated integration tests verify authenticated text-only Responses streaming, non-stream output, bounded rejection, safe error mapping, stale-route invalidation, and client-disconnect cancellation. The installed-Codex smoke covers the app-server handshake and disconnected catalog only.
 - Windows integration tests verify one-instance pipe ownership, a logon-session DACL, remote-client rejection, mutual peer identity checks, bounded accept lifetime, and full-duplex framed relay.
 - Synthetic tests verify the Native Messaging framing, strict origin policy, per-link handshake and sequence rules, direction-aware relay, coordinator correlation/lifecycle, bounded queues, and write backpressure.
-- MV3 tests and build gates verify exact active-document selection, disconnect race handling, a strict sequenced browser-safe protocol, adapter catalog/turn guards through a fake UI driver and pure semantic/state fixtures, a self-contained classic content bundle, and the absence of dynamic-code constructs in extension output. There is not yet a direct browser DOM-runtime test suite.
+- MV3 tests and build gates verify exact active-document selection, disconnect race handling, a strict sequenced browser-safe protocol, adapter catalog/turn guards through a fake UI driver and pure semantic/state fixtures, a self-contained classic content bundle, and the absence of dynamic-code constructs in extension output. A separate Chrome Stable compatibility gate preflights and reports the browser version, requires major version 151 or newer, then runs the production DOM driver on a synthetic local document and exercises nested picker discovery/selection, final raw-picker drift, `InputEvent`, `MutationObserver`, visible-text filtering, streaming completion, and verified Stop cancellation.
+- Protocol package tests exercise the isolated v2 whole-response envelope codec, including exact markers, closed schemas, duplicate JSON keys, malformed or extra content, depth/node/byte limits, and marker text inside serialized tool output. The codec is not connected to runtime routing or execution.
 - Windows packaging verifies a clean Node 24 SEA Native Host, adjacent self-contained helper, exact development manifest identity, complete artifact hashes, absence of the local repository path, and a bidirectional packaged-relay smoke with empty child environments.
 - Setup tests cover bounded package traversal, links, case collisions, changed files, dual-view shadowing and shared-view convergence, ownership conflicts, detected read/write races, retained ambiguous state, status, and conservative unregister behavior without changing the machine registry.
 - The opt-in Windows CI smoke verifies initially empty 32-bit and 64-bit HKCU development keys through install, status, and uninstall; it refuses to replace any pre-existing registration.
 
-This matrix does not claim an end-to-end IDE coding flow, macOS, Linux, automated real-Chrome launch, real-account turn, or stable ChatGPT Web compatibility. A read-only live UI audit on 2026-08-25 observed the semantic composer and direct/nested model-picker shapes used by the adapter, but it did not submit a prompt or select a model. Verification launches the packaged Native Host directly through Chrome-compatible argv and framing but does not register it or start Chrome.
+This matrix does not claim an end-to-end IDE coding flow, macOS, Linux, a packaged MV3/native-host Chrome E2E, a real-account turn, or stable ChatGPT Web compatibility. The direct Chrome gate is local and synthetic: it does not load the unpacked extension, contact ChatGPT, or use a browser profile. A read-only live UI audit on 2026-08-25 observed the semantic composer and direct/nested model-picker shapes used by the adapter, but it did not submit a prompt or select a model. Verification launches the packaged Native Host directly through Chrome-compatible argv and framing but does not register it through the browser.
 
 ## Current restrictions
 
@@ -60,7 +62,7 @@ This matrix does not claim an end-to-end IDE coding flow, macOS, Linux, automate
 - Native protocol v1 supports user text and visible output text only. It advertises no image, temporary-chat, or tool-call capability; the Responses adapter rejects richer semantics rather than stripping or reinterpreting them.
 - The nested model-picker path currently recognizes the English accessible submenu name `Model`. Localized ChatGPT picker variants have not been certified and remain unavailable when their semantics cannot be matched unambiguously.
 - Disconnect teardown can only make a best-effort click on a currently visible, verified Stop control. If the selected document or transport is already gone, or the control has not appeared, the bridge cannot confirm that ChatGPT stopped generating; inspect the selected tab because generation and Web usage may continue.
-- Normal Codex coding requests in the tested snapshot carry developer instructions and tool definitions and therefore fail closed. A tool-capable coding workflow is not part of this compatibility snapshot.
+- Normal Codex coding requests in the tested snapshot carry developer instructions and tool definitions and therefore fail closed. Protocol v2 has an accepted activation-gated design and an isolated envelope codec, but no Web Agent catalog entry, Responses v2 adapter, continuation validator, execution loop, or compatibility claim.
 
 ## Browser UI changes
 

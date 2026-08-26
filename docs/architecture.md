@@ -4,7 +4,7 @@
 
 GPTSessionBridge lets a Codex client create a thread backed by a ChatGPT Web model without moving the user's ChatGPT login into the bridge. It integrates at the Codex app-server boundary and uses a browser extension to operate only a tab the user explicitly connected.
 
-Phase 2 implements the app-server facade, initial model-catalog routing, official Codex child lifecycle, and authenticated local Responses boundary. Phase 3 adds the Native Messaging relay, authenticated Windows host-to-bridge IPC, `BrowserSessionCoordinator`, explicit-tab Manifest V3 shell, and Windows development package. The current Phase 4 increment replaces the fixed Web fixture with the coordinator's dynamic visible-UI catalog and connects a strict text-only Responses adapter to a UI-only ChatGPT DOM adapter.
+Phase 2 implements the app-server facade, initial model-catalog routing, official Codex child lifecycle, and authenticated local Responses boundary. Phase 3 adds the Native Messaging relay, authenticated Windows host-to-bridge IPC, `BrowserSessionCoordinator`, explicit-tab Manifest V3 shell, and Windows development package. Phase 4 replaces the fixed Web fixture with the coordinator's dynamic visible-UI catalog and connects a strict text-only Responses adapter to a UI-only ChatGPT DOM adapter. The current increment adds a direct synthetic Chrome DOM-runtime gate and the isolated protocol v2 envelope foundation; it does not activate a tool-capable route.
 
 ## Components
 
@@ -32,6 +32,14 @@ The local provider presents the narrow authenticated endpoint required by the Co
 Protocol v1 preserves bounded user text, visible output text, streaming, cancellation, one exact UI model choice, and no temporary-chat guarantee. The Responses parser therefore rejects tools, images, non-user roles, instructions, previous-response chaining, persistence, structured output, and unknown fields rather than dropping or reinterpreting them. Streaming emits a minimal Responses text lifecycle with serialized backpressure; client disconnect and output overflow cancel the browser turn. Browser errors are mapped to content-free local errors and never reflected verbatim.
 
 This subset supports plain-text adapter turns but is not a complete Codex coding-agent provider. Normal Codex coding requests in the tested snapshot carry developer instructions and tool definitions and therefore fail closed at this boundary. Those semantics require a separate protocol decision; the bridge does not infer executable tool calls from prose.
+
+### Experimental tool workflow boundary
+
+[ADR 0005](adr/0005-tool-capable-web-protocol-v2.md) defines a future, explicitly activated Web Agent profile. It keeps the official Codex child as the only owner of tool execution, approvals, and sandbox enforcement. The bridge would translate a validated Web proposal into a Responses function-call item and accept a continuation only after the child returns the exact matching function-call output.
+
+ChatGPT Web exposes one visible user composer rather than a developer-role transport. Protocol v2 therefore cannot claim full Responses semantic compatibility: developer instructions, user input, source excerpts, tool schemas, and tool results would become visible prompt data in the selected conversation. The profile requires a document-bound activation lease and separate `Web Agent (experimental)` model identity so it cannot be confused with the text-only `Web · …` route.
+
+The implemented protocol package contains only the strict whole-response envelope schemas, serializer, and parser. It rejects prose, Markdown fences, unknown or duplicate JSON keys, stale-shaped identifiers, excess depth/nodes/bytes, and trailing content. A round challenge provides correlation and replay resistance only; because the model can read and repeat it, the challenge is not authentication and does not make a tool proposal trusted. Runtime activation remains blocked on the provider continuation validator, agent coordinator, consent UI, sandbox floor, DOM full-response ownership checks, and end-to-end fixtures described in [Protocol v2](protocol-v2.md).
 
 ### Native Messaging host
 
