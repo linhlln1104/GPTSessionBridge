@@ -26,7 +26,7 @@ import type {
   BrowserTurnSink,
   BrowserTurnTerminal,
 } from "../browser/browser-session-coordinator.js";
-import type { BrowserModelTarget } from "../browser/browser-model-route.js";
+import type { BrowserModelProfile, BrowserModelTarget } from "../browser/browser-model-route.js";
 import { BrowserSessionError } from "../browser/browser-session-errors.js";
 
 export const SESSION_NOT_CONNECTED_CODE = "session_not_connected" as const;
@@ -81,6 +81,7 @@ const INVALID_REASONING = Symbol("invalidReasoning");
 
 export interface ResolvedResponsesModelRoute extends BrowserModelTarget {
   readonly defaultReasoningEffort?: string;
+  readonly profile: BrowserModelProfile;
   readonly sessionGeneration: number;
   readonly sessionId: string;
 }
@@ -89,7 +90,22 @@ export interface ResponsesTurnCoordinator {
   startTurn(request: BrowserTurnRequest, sink?: BrowserTurnSink): BrowserTurnHandle;
 }
 
+export interface ResponsesAgentHttpRequest {
+  readonly body: Buffer;
+  readonly clientRequestId?: string;
+  readonly model: string;
+  readonly response: ServerResponse;
+  readonly route: ResolvedResponsesModelRoute;
+  readonly threadId?: string;
+  readonly turnMetadata?: string;
+}
+
+export interface ResponsesAgentHttpHandler {
+  handleRequest(request: ResponsesAgentHttpRequest): Promise<void>;
+}
+
 export interface ResponsesServerOptions {
+  readonly agentHandler?: ResponsesAgentHttpHandler;
   readonly coordinator: ResponsesTurnCoordinator;
   readonly headerTimeoutMs: number;
   readonly maxBodyBytes: number;
@@ -315,15 +331,17 @@ export class ResponsesServer {
       );
       return;
     }
-    const parsedRequest = parseResponsesRequest(parsedBody);
-    if ("error" in parsedRequest) {
-      writeError(response, parsedRequest.error);
+    let route: ResolvedResponsesModelRoute | undefined;
+    const requestedModel = readRequestedModel(parsedBody);
+    if (requestedModel === undefined) {
+      writeError(
+        response,
+        apiError(HTTP_BAD_REQUEST, INVALID_REQUEST_CODE, "A valid model is required."),
+      );
       return;
     }
-
-    let route: ResolvedResponsesModelRoute | undefined;
     try {
-      route = this.#options.resolveModelRoute(parsedRequest.value.model);
+      route = this.#options.resolveModelRoute(requestedModel);
     } catch {
       route = undefined;
     }
@@ -333,6 +351,35 @@ export class ResponsesServer {
         response,
         apiError(HTTP_BAD_REQUEST, MODEL_NOT_FOUND_CODE, "The requested Web model is unavailable."),
       );
+      return;
+    }
+    if (validatedRoute.profile === "agent-v2") {
+      if (this.#options.agentHandler === undefined) {
+        writeError(
+          response,
+          apiError(
+            HTTP_SERVICE_UNAVAILABLE,
+            UNSUPPORTED_TOOLS_CODE,
+            "The Web Agent provider is unavailable.",
+          ),
+        );
+        return;
+      }
+      await this.#options.agentHandler.handleRequest(
+        Object.freeze({
+          body: Buffer.from(body),
+          ...readAgentRequestHeaders(request),
+          model: requestedModel,
+          response,
+          route: validatedRoute,
+        }),
+      );
+      return;
+    }
+
+    const parsedRequest = parseResponsesRequest(parsedBody);
+    if ("error" in parsedRequest) {
+      writeError(response, parsedRequest.error);
       return;
     }
     const reasoningEffort =
@@ -705,6 +752,7 @@ function validateResolvedRoute(
   if (
     !revision.success ||
     !model.success ||
+    !isBrowserModelProfile(route.profile) ||
     defaultEffort?.success === false ||
     !sessionId.success ||
     !Number.isSafeInteger(route.sessionGeneration) ||
@@ -716,9 +764,43 @@ function validateResolvedRoute(
     catalogRevision: revision.data,
     ...(defaultEffort === undefined ? {} : { defaultReasoningEffort: defaultEffort.data }),
     modelId: model.data,
+    profile: route.profile,
     sessionGeneration: route.sessionGeneration,
     sessionId: sessionId.data,
   });
+}
+
+function isBrowserModelProfile(value: unknown): value is BrowserModelProfile {
+  return value === "text-v1" || value === "agent-v2";
+}
+
+function readRequestedModel(value: Readonly<Record<string, unknown>>): string | undefined {
+  const model = value["model"];
+  return typeof model === "string" && isBoundedTrimmedText(model, MAX_MODEL_CHARACTERS)
+    ? model
+    : undefined;
+}
+
+function readAgentRequestHeaders(
+  request: IncomingMessage,
+): Omit<ResponsesAgentHttpRequest, "body" | "model" | "response" | "route"> {
+  const clientRequestId = readBoundedHeader(request.headers["x-client-request-id"], 256);
+  const threadId = readBoundedHeader(request.headers["thread-id"], 256);
+  const turnMetadata = readBoundedHeader(request.headers["x-codex-turn-metadata"], 8 * 1024);
+  return Object.freeze({
+    ...(clientRequestId === undefined ? {} : { clientRequestId }),
+    ...(threadId === undefined ? {} : { threadId }),
+    ...(turnMetadata === undefined ? {} : { turnMetadata }),
+  });
+}
+
+function readBoundedHeader(
+  value: string | readonly string[] | undefined,
+  maxLength: number,
+): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength
+    ? value
+    : undefined;
 }
 
 function mapTurnStartError(error: unknown): ApiError {

@@ -1,8 +1,12 @@
 import { randomBytes } from "node:crypto";
 
 import {
+  AGENT_WORKFLOW_PROTOCOL_VERSION,
   BRIDGE_ERROR_CODES,
   NATIVE_MESSAGING_PROTOCOL_VERSION,
+  activeAgentStatusSnapshotSchema,
+  agentTurnStartFrameSchema,
+  agentStatusSnapshotSchema,
   bridgeErrorSchema,
   browserCapabilitiesSchema,
   nativeMessagingFrameSchema,
@@ -13,6 +17,8 @@ import {
   turnStartFrameSchema,
   type BridgeError,
   type BrowserCapabilities,
+  type ActiveAgentStatusSnapshot,
+  type AgentStatusSnapshot,
   type NativeMessagingFrame,
   type NativeMessagingFrameOf,
   type SessionCloseReason,
@@ -47,6 +53,10 @@ export interface BrowserCapabilitySnapshot {
   readonly capabilities: BrowserCapabilities;
   readonly generation: number;
   readonly sessionId: string;
+}
+
+export interface BrowserAgentActivationAvailability {
+  readonly active: boolean;
 }
 
 export interface BrowserTurnRequest {
@@ -101,6 +111,7 @@ export interface BrowserSessionCoordinatorOptions {
   readonly createIdentifier?: (kind: BrowserIdentifierKind) => string;
   readonly maxCatalogRevisions?: number;
   readonly maxPendingOperations?: number;
+  readonly now?: () => number;
   readonly scheduler?: BrowserSessionScheduler;
   readonly turnTimeoutMs?: number;
 }
@@ -111,6 +122,7 @@ interface NormalizedOptions {
   readonly createIdentifier: (kind: BrowserIdentifierKind) => string;
   readonly maxCatalogRevisions: number;
   readonly maxPendingOperations: number;
+  readonly now: () => number;
   readonly scheduler: BrowserSessionScheduler;
   readonly turnTimeoutMs: number;
 }
@@ -123,6 +135,8 @@ interface Deferred<Value> {
 }
 
 type PendingOperation =
+  | PendingSessionOperation<"agent-activity-note">
+  | PendingSessionOperation<"agent-status-read">
   | PendingSessionOperation<"capabilities-read">
   | PendingSessionOperation<"session-connect">
   | PendingSessionOperation<"session-disconnect">
@@ -151,6 +165,19 @@ interface ConnectionAttempt {
 
 interface DisconnectAttempt {
   readonly deferred: Deferred<undefined>;
+  readonly requestId: string;
+  readonly sessionId: string;
+}
+
+interface AgentStatusReadAttempt {
+  readonly deferred: Deferred<AgentStatusSnapshot>;
+  readonly requestId: string;
+  readonly sessionId: string;
+}
+
+interface AgentActivityAttempt {
+  readonly deferred: Deferred<ActiveAgentStatusSnapshot>;
+  readonly expected: ActiveAgentStatusSnapshot;
   readonly requestId: string;
   readonly sessionId: string;
 }
@@ -213,6 +240,9 @@ export class BrowserSessionCoordinator {
   readonly #recentIdentifiers = new Set<string>();
   readonly #revisionFingerprints = new Map<string, string>();
   #activeTurn: ActiveTurn | undefined;
+  #agentActivityAttempt: AgentActivityAttempt | undefined;
+  #agentStatus: AgentStatusSnapshot | undefined;
+  #agentStatusReadAttempt: AgentStatusReadAttempt | undefined;
   #closed = false;
   #connectionAttempt: ConnectionAttempt | undefined;
   #disconnectAttempt: DisconnectAttempt | undefined;
@@ -240,11 +270,13 @@ export class BrowserSessionCoordinator {
         options.maxPendingOperations,
         DEFAULT_MAX_PENDING_OPERATIONS,
       ),
+      now: options.now ?? Date.now,
       scheduler: options.scheduler ?? DEFAULT_SCHEDULER,
       turnTimeoutMs: readPositiveInteger(options.turnTimeoutMs, DEFAULT_TURN_TIMEOUT_MS),
     });
     if (
       typeof this.#options.createIdentifier !== "function" ||
+      typeof this.#options.now !== "function" ||
       !isScheduler(this.#options.scheduler)
     ) {
       throw new RangeError("Invalid browser session coordinator options");
@@ -253,6 +285,19 @@ export class BrowserSessionCoordinator {
 
   public get snapshot(): BrowserCapabilitySnapshot | undefined {
     return this.#snapshot;
+  }
+
+  public get agentActivation(): BrowserAgentActivationAvailability {
+    return Object.freeze({ active: this.activeAgentStatus !== undefined });
+  }
+
+  public get agentStatus(): AgentStatusSnapshot | undefined {
+    return this.#agentStatus;
+  }
+
+  public get activeAgentStatus(): ActiveAgentStatusSnapshot | undefined {
+    const status = this.#agentStatus;
+    return status?.state === "active" && this.#readNow() < status.expiresAtMs ? status : undefined;
   }
 
   public get state(): BrowserSessionCoordinatorState {
@@ -418,9 +463,122 @@ export class BrowserSessionCoordinator {
     return deferred.promise;
   }
 
+  public refreshAgentStatus(): Promise<AgentStatusSnapshot> {
+    this.#assertAttached();
+    if (this.#sessionPhase !== "ready" || this.#sessionId === undefined) {
+      return rejectedPromise(
+        createBrowserSessionError(
+          BRIDGE_ERROR_CODES.SESSION_NOT_CONNECTED,
+          "No ready browser session is connected.",
+          true,
+        ),
+      );
+    }
+    if (this.#agentStatusReadAttempt !== undefined) {
+      return this.#agentStatusReadAttempt.deferred.promise;
+    }
+
+    const requestId = this.#createIdentifier("request");
+    const deferred = createDeferred<AgentStatusSnapshot>();
+    const sessionId = this.#sessionId;
+    this.#agentStatusReadAttempt = { deferred, requestId, sessionId };
+    try {
+      this.#reservePending(
+        { kind: "agent-status-read", requestId, sessionId },
+        this.#options.commandTimeoutMs,
+      );
+      this.#send({ payload: { sessionId }, requestId, type: "agent/status/read" });
+    } catch (error) {
+      const normalized = normalizeLocalError(error);
+      this.#removePending(requestId);
+      this.#agentStatusReadAttempt = undefined;
+      deferred.reject(normalized);
+    }
+    return deferred.promise;
+  }
+
+  public noteAgentActivity(
+    expected: ActiveAgentStatusSnapshot,
+  ): Promise<ActiveAgentStatusSnapshot> {
+    this.#assertAttached();
+    const current = this.activeAgentStatus;
+    let normalizedExpected: ActiveAgentStatusSnapshot;
+    try {
+      normalizedExpected = freezeActiveAgentStatus(activeAgentStatusSnapshotSchema.parse(expected));
+    } catch {
+      return rejectedPromise(browserStateChanged("The Web Agent activation lease is invalid."));
+    }
+    if (current === undefined || !sameActiveAgentStatus(current, normalizedExpected)) {
+      return rejectedPromise(browserStateChanged("The Web Agent activation lease is stale."));
+    }
+    if (this.#sessionPhase !== "ready" || this.#sessionId === undefined) {
+      return rejectedPromise(
+        createBrowserSessionError(
+          BRIDGE_ERROR_CODES.SESSION_NOT_CONNECTED,
+          "No ready browser session is connected.",
+          true,
+        ),
+      );
+    }
+    if (this.#agentActivityAttempt !== undefined) {
+      return sameActiveAgentStatus(this.#agentActivityAttempt.expected, normalizedExpected)
+        ? this.#agentActivityAttempt.deferred.promise
+        : rejectedPromise(browserStateChanged("Another Web Agent lease renewal is active."));
+    }
+
+    const requestId = this.#createIdentifier("request");
+    const deferred = createDeferred<ActiveAgentStatusSnapshot>();
+    const sessionId = this.#sessionId;
+    this.#agentActivityAttempt = {
+      deferred,
+      expected: normalizedExpected,
+      requestId,
+      sessionId,
+    };
+    try {
+      this.#reservePending(
+        { kind: "agent-activity-note", requestId, sessionId },
+        this.#options.commandTimeoutMs,
+      );
+      this.#send({
+        payload: { expected: normalizedExpected, sessionId },
+        requestId,
+        type: "agent/activity/note",
+      });
+    } catch (error) {
+      const normalized = normalizeLocalError(error);
+      this.#removePending(requestId);
+      this.#agentActivityAttempt = undefined;
+      deferred.reject(normalized);
+    }
+    return deferred.promise;
+  }
+
   public startTurn(
     request: BrowserTurnRequest,
     sink: BrowserTurnSink = EMPTY_SINK,
+  ): BrowserTurnHandle {
+    return this.#startTurn(request, sink);
+  }
+
+  public startAgentTurn(
+    expected: ActiveAgentStatusSnapshot,
+    request: BrowserTurnRequest,
+    sink: BrowserTurnSink = EMPTY_SINK,
+  ): BrowserTurnHandle {
+    let normalizedExpected: ActiveAgentStatusSnapshot;
+    try {
+      normalizedExpected = freezeActiveAgentStatus(activeAgentStatusSnapshotSchema.parse(expected));
+    } catch {
+      throw browserStateChanged("The Web Agent activation lease is invalid.");
+    }
+    return this.#startTurn(request, sink, normalizedExpected);
+  }
+
+  #startTurn(
+    request: BrowserTurnRequest,
+    sink: BrowserTurnSink,
+    expectedAgentStatus?: ActiveAgentStatusSnapshot,
   ): BrowserTurnHandle {
     this.#assertAttached();
     const snapshot = this.#snapshot;
@@ -437,6 +595,19 @@ export class BrowserSessionCoordinator {
         "A browser turn is already active.",
         true,
       );
+    }
+    if (expectedAgentStatus !== undefined) {
+      const current = this.activeAgentStatus;
+      if (current === undefined || !sameActiveAgentStatus(current, expectedAgentStatus)) {
+        throw browserStateChanged("The Web Agent activation lease is stale.");
+      }
+      if (request.temporary) {
+        throw createBrowserSessionError(
+          BRIDGE_ERROR_CODES.CAPABILITY_UNSUPPORTED,
+          "Temporary Web Agent turns are unsupported.",
+          false,
+        );
+      }
     }
     if (!isTurnSink(sink)) {
       throw createBrowserSessionError(
@@ -459,21 +630,41 @@ export class BrowserSessionCoordinator {
     this.#assertTurnCapabilities(snapshot.capabilities, request);
     const requestId = this.#createIdentifier("request");
     const turnId = this.#createIdentifier("turn");
-    const parsed = turnStartFrameSchema.safeParse({
-      payload: {
-        catalogRevision: request.catalogRevision,
-        input: request.input,
-        modelId: request.modelId,
-        reasoningEffort: request.reasoningEffort,
-        sessionId: snapshot.sessionId,
-        temporary: request.temporary,
-        turnId,
-      },
+    const frameBase = {
       protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
       requestId,
       sequence: 0,
-      type: "turn/start",
-    });
+    } as const;
+    const parsed =
+      expectedAgentStatus === undefined
+        ? turnStartFrameSchema.safeParse({
+            ...frameBase,
+            payload: {
+              catalogRevision: request.catalogRevision,
+              input: request.input,
+              modelId: request.modelId,
+              reasoningEffort: request.reasoningEffort,
+              sessionId: snapshot.sessionId,
+              temporary: request.temporary,
+              turnId,
+            },
+            type: "turn/start",
+          })
+        : agentTurnStartFrameSchema.safeParse({
+            ...frameBase,
+            payload: {
+              agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+              catalogRevision: request.catalogRevision,
+              expected: expectedAgentStatus,
+              input: request.input,
+              modelId: request.modelId,
+              reasoningEffort: request.reasoningEffort,
+              sessionId: snapshot.sessionId,
+              temporary: false,
+              turnId,
+            },
+            type: "agent/turn/start",
+          });
     if (!parsed.success) {
       throw createBrowserSessionError(
         BRIDGE_ERROR_CODES.PROTOCOL_INVALID_MESSAGE,
@@ -506,11 +697,19 @@ export class BrowserSessionCoordinator {
         },
         this.#options.commandTimeoutMs,
       );
-      this.#send({
-        payload: freezeTurnStartPayload(parsed.data.payload),
-        requestId,
-        type: "turn/start",
-      });
+      if (parsed.data.type === "agent/turn/start") {
+        this.#send({
+          payload: freezeAgentTurnStartPayload(parsed.data.payload),
+          requestId,
+          type: "agent/turn/start",
+        });
+      } else {
+        this.#send({
+          payload: freezeTurnStartPayload(parsed.data.payload),
+          requestId,
+          type: "turn/start",
+        });
+      }
     } catch (error) {
       const normalized = normalizeLocalError(error);
       this.#settleActiveTurn(active, { error: normalized.bridgeError, kind: "failed" }, normalized);
@@ -569,6 +768,15 @@ export class BrowserSessionCoordinator {
       case "capabilities/changed":
         this.#handleCapabilitiesChanged(frame);
         return;
+      case "agent/status/result":
+        this.#handleAgentStatusResult(frame);
+        return;
+      case "agent/status/changed":
+        this.#handleAgentStatusChanged(frame);
+        return;
+      case "agent/activity/result":
+        this.#handleAgentActivityResult(frame);
+        return;
       case "turn/started":
         this.#handleTurnStarted(frame);
         return;
@@ -588,6 +796,9 @@ export class BrowserSessionCoordinator {
         this.#handleRemoteError(frame);
         return;
       case "ack":
+      case "agent/activity/note":
+      case "agent/status/read":
+      case "agent/turn/start":
       case "capabilities/read":
       case "heartbeat":
       case "hello":
@@ -669,6 +880,11 @@ export class BrowserSessionCoordinator {
     }
     this.#connectionAttempt = undefined;
     attempt.deferred.resolve(snapshot);
+    try {
+      void this.refreshAgentStatus().catch(() => undefined);
+    } catch {
+      // Agent status remains fail-closed while normal text turns stay available.
+    }
   }
 
   #handleCapabilitiesChanged(frame: NativeMessagingFrameOf<"capabilities/changed">): void {
@@ -683,6 +899,49 @@ export class BrowserSessionCoordinator {
       throw protocolViolation("Browser capabilities changed before discovery completed.");
     }
     this.#installCapabilities(frame.payload.capabilities);
+  }
+
+  #handleAgentStatusResult(frame: NativeMessagingFrameOf<"agent/status/result">): void {
+    const pending = this.#expectPending(frame.requestId, "agent-status-read");
+    this.#assertSessionIdentity(pending.sessionId, frame.payload.sessionId);
+    const attempt = this.#agentStatusReadAttempt;
+    if (attempt?.requestId !== frame.requestId || attempt.sessionId !== frame.payload.sessionId) {
+      throw protocolViolation("The Web Agent status response is not correlated.");
+    }
+    this.#removePending(frame.requestId);
+    this.#agentStatusReadAttempt = undefined;
+    const status = this.#installAgentStatus(frame.payload.status);
+    attempt.deferred.resolve(status);
+  }
+
+  #handleAgentStatusChanged(frame: NativeMessagingFrameOf<"agent/status/changed">): void {
+    if (this.#sessionId === undefined || this.#sessionPhase === "disconnected") {
+      throw protocolViolation("Web Agent status changed for an unknown session.");
+    }
+    this.#assertSessionIdentity(this.#sessionId, frame.payload.sessionId);
+    if (this.#sessionPhase !== "disconnecting") {
+      this.#installAgentStatus(frame.payload.status);
+    }
+  }
+
+  #handleAgentActivityResult(frame: NativeMessagingFrameOf<"agent/activity/result">): void {
+    const pending = this.#expectPending(frame.requestId, "agent-activity-note");
+    this.#assertSessionIdentity(pending.sessionId, frame.payload.sessionId);
+    const attempt = this.#agentActivityAttempt;
+    if (attempt?.requestId !== frame.requestId || attempt.sessionId !== frame.payload.sessionId) {
+      throw protocolViolation("The Web Agent activity response is not correlated.");
+    }
+    const renewed = freezeActiveAgentStatus(frame.payload.status);
+    if (!isValidAgentRenewal(attempt.expected, renewed)) {
+      throw protocolViolation("The Web Agent activity response changed its lease binding.");
+    }
+    this.#removePending(frame.requestId);
+    this.#agentActivityAttempt = undefined;
+    const status = this.#installAgentStatus(renewed);
+    if (status.state !== "active") {
+      throw protocolViolation("The Web Agent activity response is inactive.");
+    }
+    attempt.deferred.resolve(status);
   }
 
   #handleTurnStarted(frame: NativeMessagingFrameOf<"turn/started">): void {
@@ -763,6 +1022,26 @@ export class BrowserSessionCoordinator {
     const remoteError = new BrowserSessionError(frame.payload.error);
 
     switch (pending.kind) {
+      case "agent-status-read": {
+        const attempt = this.#agentStatusReadAttempt;
+        if (attempt?.requestId !== frame.requestId) {
+          throw protocolViolation("The Web Agent status error is not correlated.");
+        }
+        this.#agentStatusReadAttempt = undefined;
+        this.#agentStatus = undefined;
+        attempt.deferred.reject(remoteError);
+        return;
+      }
+      case "agent-activity-note": {
+        const attempt = this.#agentActivityAttempt;
+        if (attempt?.requestId !== frame.requestId) {
+          throw protocolViolation("The Web Agent activity error is not correlated.");
+        }
+        this.#agentActivityAttempt = undefined;
+        this.#agentStatus = undefined;
+        attempt.deferred.reject(remoteError);
+        return;
+      }
       case "turn-start": {
         const active = this.#assertActiveTurn(pending.sessionId, pending.turnId);
         this.#settleActiveTurn(
@@ -842,6 +1121,24 @@ export class BrowserSessionCoordinator {
     this.#nextSnapshotGeneration += 1;
     this.#snapshot = snapshot;
     return snapshot;
+  }
+
+  #installAgentStatus(value: AgentStatusSnapshot): AgentStatusSnapshot {
+    const next = freezeAgentStatus(agentStatusSnapshotSchema.parse(value));
+    const current = this.#agentStatus;
+    if (current !== undefined) {
+      if (next.revision < current.revision) {
+        throw protocolViolation("The browser sent an older Web Agent status revision.");
+      }
+      if (next.revision === current.revision) {
+        if (!sameAgentStatus(current, next)) {
+          throw protocolViolation("The browser redefined a Web Agent status revision.");
+        }
+        return current;
+      }
+    }
+    this.#agentStatus = next;
+    return next;
   }
 
   #assertTurnCapabilities(capabilities: BrowserCapabilities, request: BrowserTurnRequest): void {
@@ -1162,6 +1459,10 @@ export class BrowserSessionCoordinator {
 
     this.#connectionAttempt?.deferred.reject(error);
     this.#connectionAttempt = undefined;
+    this.#agentStatusReadAttempt?.deferred.reject(error);
+    this.#agentStatusReadAttempt = undefined;
+    this.#agentActivityAttempt?.deferred.reject(error);
+    this.#agentActivityAttempt = undefined;
     if (this.#disconnectAttempt !== undefined) {
       if (disconnected) {
         this.#disconnectAttempt.deferred.resolve(undefined);
@@ -1175,9 +1476,27 @@ export class BrowserSessionCoordinator {
     }
 
     this.#revisionFingerprints.clear();
+    this.#agentStatus = undefined;
     this.#sessionId = undefined;
     this.#snapshot = undefined;
     this.#sessionPhase = this.#closed ? "closed" : "disconnected";
+  }
+
+  #readNow(): number {
+    let value: unknown;
+    try {
+      value = this.#options.now();
+    } catch {
+      value = undefined;
+    }
+    if (!Number.isSafeInteger(value) || (value as number) < 0) {
+      throw createBrowserSessionError(
+        BRIDGE_ERROR_CODES.INTERNAL_ERROR,
+        "The browser session clock is invalid.",
+        false,
+      );
+    }
+    return value as number;
   }
 
   #createIdentifier(kind: BrowserIdentifierKind): string {
@@ -1261,6 +1580,10 @@ function protocolViolation(message: string): BrowserSessionError {
   return createBrowserSessionError(BRIDGE_ERROR_CODES.PROTOCOL_INVALID_MESSAGE, message, false);
 }
 
+function browserStateChanged(message: string): BrowserSessionError {
+  return createBrowserSessionError(BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED, message, true);
+}
+
 function normalizeLocalError(error: unknown): BrowserSessionError {
   return error instanceof BrowserSessionError
     ? error
@@ -1299,6 +1622,67 @@ function isUnknownRecord(value: unknown): value is Readonly<Record<string, unkno
   return typeof value === "object" && value !== null;
 }
 
+function freezeAgentStatus(value: AgentStatusSnapshot): AgentStatusSnapshot {
+  return value.state === "active"
+    ? freezeActiveAgentStatus(value)
+    : Object.freeze({ revision: value.revision, state: "inactive" });
+}
+
+function freezeActiveAgentStatus(value: ActiveAgentStatusSnapshot): ActiveAgentStatusSnapshot {
+  return Object.freeze({
+    binding: Object.freeze({ ...value.binding }),
+    conversationOwnershipId: value.conversationOwnershipId,
+    expiresAtMs: value.expiresAtMs,
+    issuedAtMs: value.issuedAtMs,
+    lastActivityAtMs: value.lastActivityAtMs,
+    leaseId: value.leaseId,
+    revision: value.revision,
+    state: "active",
+  });
+}
+
+function sameAgentStatus(left: AgentStatusSnapshot, right: AgentStatusSnapshot): boolean {
+  if (left.state !== right.state || left.revision !== right.revision) {
+    return false;
+  }
+  return (
+    left.state === "inactive" || sameActiveAgentStatus(left, right as ActiveAgentStatusSnapshot)
+  );
+}
+
+function sameActiveAgentStatus(
+  left: ActiveAgentStatusSnapshot,
+  right: ActiveAgentStatusSnapshot,
+): boolean {
+  return (
+    left.binding.documentId === right.binding.documentId &&
+    left.binding.generation === right.binding.generation &&
+    left.binding.tabId === right.binding.tabId &&
+    left.conversationOwnershipId === right.conversationOwnershipId &&
+    left.expiresAtMs === right.expiresAtMs &&
+    left.issuedAtMs === right.issuedAtMs &&
+    left.lastActivityAtMs === right.lastActivityAtMs &&
+    left.leaseId === right.leaseId &&
+    left.revision === right.revision
+  );
+}
+
+function isValidAgentRenewal(
+  expected: ActiveAgentStatusSnapshot,
+  renewed: ActiveAgentStatusSnapshot,
+): boolean {
+  return (
+    expected.binding.documentId === renewed.binding.documentId &&
+    expected.binding.generation === renewed.binding.generation &&
+    expected.binding.tabId === renewed.binding.tabId &&
+    expected.conversationOwnershipId === renewed.conversationOwnershipId &&
+    expected.issuedAtMs === renewed.issuedAtMs &&
+    expected.leaseId === renewed.leaseId &&
+    renewed.lastActivityAtMs >= expected.lastActivityAtMs &&
+    renewed.revision > expected.revision
+  );
+}
+
 function freezeCapabilities(value: BrowserCapabilities): BrowserCapabilities {
   const models = value.models.map((model) =>
     Object.freeze({
@@ -1322,6 +1706,16 @@ function freezeTurnStartPayload(
     ...payload,
     input: Object.freeze(payload.input.map((item) => Object.freeze({ ...item }))),
   }) as NativeMessagingFrameOf<"turn/start">["payload"];
+}
+
+function freezeAgentTurnStartPayload(
+  payload: NativeMessagingFrameOf<"agent/turn/start">["payload"],
+): NativeMessagingFrameOf<"agent/turn/start">["payload"] {
+  return Object.freeze({
+    ...payload,
+    expected: freezeActiveAgentStatus(payload.expected),
+    input: Object.freeze(payload.input.map((item) => Object.freeze({ ...item }))),
+  }) as NativeMessagingFrameOf<"agent/turn/start">["payload"];
 }
 
 function freezeTerminal(terminal: BrowserTurnTerminal): BrowserTurnTerminal {

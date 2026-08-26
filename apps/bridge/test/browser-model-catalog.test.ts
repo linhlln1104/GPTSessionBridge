@@ -59,8 +59,40 @@ describe("browser model catalog projection", () => {
       catalogRevision: "catalog-a",
       defaultReasoningEffort: "medium",
       modelId: "ui-gpt-5-6-sol-abc",
+      profile: "text-v1",
       sessionGeneration: 1,
       sessionId: "session-a",
+    });
+  });
+
+  it("publishes one agent profile per model only while agent activation is active", () => {
+    const source = {
+      agentActivation: { active: false },
+      snapshot: snapshot("catalog-a", "ui-gpt-5-6-sol-abc"),
+    };
+    const state = new BrowserModelCatalogState(source);
+    const textDefinition = state.listVirtualModels()[0];
+    const textRoute = state.listRouteDefinitions()[0];
+
+    expect(state.listVirtualModels()).toHaveLength(1);
+    expect(textDefinition?.displayName).toBe("Web · GPT-5.6 Sol");
+    expect(state.resolveModelRoute(textRoute?.providerModel ?? "")?.profile).toBe("text-v1");
+
+    source.agentActivation = { active: true };
+    const agentDefinitions = state.listVirtualModels();
+    const agentRoutes = state.listRouteDefinitions();
+
+    expect(agentDefinitions).toHaveLength(1);
+    expect(agentRoutes).toHaveLength(1);
+    expect(agentDefinitions[0]).toMatchObject({
+      description: "ChatGPT Web model available through the active Web Agent consent lease.",
+      displayName: "Web Agent · GPT-5.6 Sol",
+    });
+    expect(agentDefinitions[0]?.publicKey).not.toBe(textDefinition?.publicKey);
+    expect(agentRoutes[0]?.providerModel).not.toBe(textRoute?.providerModel);
+    expect(state.resolveModelRoute(textRoute?.providerModel ?? "")).toBeUndefined();
+    expect(state.resolveModelRoute(agentRoutes[0]?.providerModel ?? "")).toMatchObject({
+      profile: "agent-v2",
     });
   });
 
@@ -81,6 +113,7 @@ describe("browser model catalog projection", () => {
       catalogRevision: "catalog-b",
       defaultReasoningEffort: "medium",
       modelId: "ui-gpt-5-6-sol-abc",
+      profile: "text-v1",
       sessionGeneration: 1,
       sessionId: "session-a",
     });

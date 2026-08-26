@@ -16,6 +16,7 @@ import { createBrowserSessionError } from "../src/browser/browser-session-errors
 import {
   ResponsesServer,
   SESSION_NOT_CONNECTED_CODE,
+  type ResponsesAgentHttpRequest,
   type ResponsesTurnCoordinator,
 } from "../src/http/responses-server.js";
 
@@ -127,6 +128,59 @@ describe("ResponsesServer", () => {
       type: "response.completed",
     });
     expect(body).not.toContain("private-stream-prompt");
+  });
+
+  it("dispatches an agent-v2 route before the text-only request parser", async () => {
+    const requests: ResponsesAgentHttpRequest[] = [];
+    const agentServer = createServer(token, coordinator, {
+      agentHandler: {
+        handleRequest(request): Promise<void> {
+          requests.push(request);
+          request.response.statusCode = 204;
+          request.response.end();
+          return Promise.resolve();
+        },
+      },
+      profile: "agent-v2",
+    });
+    await server.close();
+    server = agentServer;
+    await server.start();
+
+    const response = await fetch(`${server.address.baseUrl}/responses`, {
+      body: JSON.stringify({
+        input: [
+          {
+            content: [{ text: "agent prompt", type: "input_text" }],
+            id: "msg_fixture",
+            role: "user",
+            type: "message",
+          },
+        ],
+        model: PROVIDER_MODEL,
+        parallel_tool_calls: true,
+        stream: true,
+        tools: [{ name: "exec_command", type: "function" }],
+      }),
+      headers: {
+        ...authorizedHeaders(token),
+        "thread-id": "thread-fixture",
+        "x-client-request-id": "request-fixture",
+        "x-codex-turn-metadata": '{"turn_id":"turn-fixture"}',
+      },
+      method: "POST",
+    });
+
+    expect(response.status).toBe(204);
+    expect(coordinator.requests).toEqual([]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      clientRequestId: "request-fixture",
+      model: PROVIDER_MODEL,
+      threadId: "thread-fixture",
+      turnMetadata: '{"turn_id":"turn-fixture"}',
+      route: { profile: "agent-v2" },
+    });
   });
 
   it("returns a safe disconnected error without reflecting request or browser text", async () => {
@@ -561,10 +615,13 @@ function serverOptions(
   capabilityToken: CapabilityToken,
   turnCoordinator: ResponsesTurnCoordinator,
   overrides: {
+    readonly agentHandler?: ConstructorParameters<typeof ResponsesServer>[0]["agentHandler"];
     readonly maxOutputBytes?: number;
+    readonly profile?: "agent-v2" | "text-v1";
   } = {},
 ): ConstructorParameters<typeof ResponsesServer>[0] {
   return {
+    ...(overrides.agentHandler === undefined ? {} : { agentHandler: overrides.agentHandler }),
     coordinator: turnCoordinator,
     headerTimeoutMs: 1_000,
     maxBodyBytes: 4_096,
@@ -577,6 +634,7 @@ function serverOptions(
             catalogRevision: "catalog-a",
             defaultReasoningEffort: "medium",
             modelId: "web-model",
+            profile: overrides.profile ?? "text-v1",
             sessionGeneration: 1,
             sessionId: "session-a",
           }

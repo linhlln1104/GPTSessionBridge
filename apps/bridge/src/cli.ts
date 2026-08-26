@@ -17,6 +17,7 @@ import { AppServerRouter } from "./facade/app-server-router.js";
 import { BidirectionalAppServerProxy } from "./facade/bidirectional-proxy.js";
 import { createDefaultFacadeState } from "./facade/default-state.js";
 import { ResponsesServer } from "./http/responses-server.js";
+import { ResponsesAgentRuntime } from "./http/responses-agent-runtime.js";
 import {
   createDefaultBrowserIpcRuntime,
   type BrowserIpcRuntime,
@@ -263,7 +264,9 @@ export async function runAppServerFacade(options: RunAppServerFacadeOptions): Pr
   const ownsCoordinator = options.browserIpc === undefined;
   const coordinator = options.browserIpc?.coordinator ?? new BrowserSessionCoordinator();
   const browserModels = options.browserModels ?? new BrowserModelCatalogState(coordinator);
+  const agentRuntime = new ResponsesAgentRuntime({ browserCoordinator: coordinator });
   const responses = new ResponsesServer({
+    agentHandler: agentRuntime,
     coordinator,
     headerTimeoutMs: policy.timeout.handshakeMs,
     maxBodyBytes: policy.size.maxFrameBytes,
@@ -368,6 +371,7 @@ export async function runAppServerFacade(options: RunAppServerFacadeOptions): Pr
       await options.browserIpc?.close().catch(() => undefined);
       await browserIpcMonitor?.catch(() => undefined);
     }
+    agentRuntime.close();
     await responses.close();
     if (ownsCoordinator) {
       coordinator.close();
@@ -543,10 +547,12 @@ function isDirectExecution(entry: string | undefined): boolean {
   return entry !== undefined && pathToFileURL(entry).href === import.meta.url;
 }
 
-async function main(): Promise<void> {
+export async function runBridgeProcess(
+  args: readonly string[] = process.argv.slice(2),
+  bridgeExecutable: string | undefined = process.argv[1],
+): Promise<void> {
   try {
-    const bridgeExecutable = process.argv[1];
-    process.exitCode = await runCli(process.argv.slice(2), {
+    process.exitCode = await runCli(args, {
       ...(bridgeExecutable === undefined ? {} : { bridgeExecutable }),
     });
   } catch (error) {
@@ -557,5 +563,5 @@ async function main(): Promise<void> {
 }
 
 if (isDirectExecution(process.argv[1])) {
-  void main();
+  void runBridgeProcess();
 }

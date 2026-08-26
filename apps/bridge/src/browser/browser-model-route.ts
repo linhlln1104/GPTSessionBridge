@@ -13,12 +13,15 @@ const ROUTE_TOKEN_PATTERN = new RegExp(
   "u",
 );
 
+export type BrowserModelProfile = "agent-v2" | "text-v1";
+
 export interface BrowserModelTarget {
   readonly catalogRevision: string;
   readonly modelId: string;
 }
 
 export interface BrowserModelRoute extends BrowserModelTarget {
+  readonly profile: BrowserModelProfile;
   readonly sessionGeneration: number;
   readonly sessionId: string;
 }
@@ -31,16 +34,27 @@ export interface BrowserModelRoute extends BrowserModelTarget {
 export function createBrowserModelRouteToken(route: BrowserModelRoute): string {
   const catalogRevision = catalogRevisionSchema.parse(route.catalogRevision);
   const modelId = modelIdSchema.parse(route.modelId);
+  const profile = parseBrowserModelProfile(route.profile);
   const sessionId = sessionIdSchema.parse(route.sessionId);
   if (!Number.isSafeInteger(route.sessionGeneration) || route.sessionGeneration < 1) {
     throw new TypeError("Invalid browser session generation");
   }
   const digest = createHash("sha256")
-    .update(JSON.stringify([sessionId, route.sessionGeneration, catalogRevision, modelId]), "utf8")
+    .update(
+      JSON.stringify([sessionId, route.sessionGeneration, catalogRevision, modelId, profile]),
+      "utf8",
+    )
     .digest("base64url");
   return `${ROUTE_TOKEN_PREFIX}${digest}`;
 }
 
 export function isBrowserModelRouteToken(value: unknown): value is string {
   return typeof value === "string" && ROUTE_TOKEN_PATTERN.test(value);
+}
+
+function parseBrowserModelProfile(value: unknown): BrowserModelProfile {
+  if (value !== "text-v1" && value !== "agent-v2") {
+    throw new TypeError("Invalid browser model profile");
+  }
+  return value;
 }

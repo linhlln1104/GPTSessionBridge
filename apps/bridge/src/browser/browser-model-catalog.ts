@@ -7,6 +7,7 @@ import type { VirtualModelRouteDefinition } from "@gpt-session-bridge/core/routi
 import {
   createBrowserModelRouteToken,
   isBrowserModelRouteToken,
+  type BrowserModelProfile,
   type BrowserModelRoute,
 } from "./browser-model-route.js";
 import type { BrowserCapabilitySnapshot } from "./browser-session-coordinator.js";
@@ -14,7 +15,12 @@ import type { BrowserCapabilitySnapshot } from "./browser-session-coordinator.js
 const PUBLIC_SLUG_CHARACTERS = 32;
 const PUBLIC_HASH_CHARACTERS = 24;
 
+export interface BrowserAgentActivationState {
+  readonly active: boolean;
+}
+
 export interface BrowserModelSnapshotSource {
+  readonly agentActivation?: BrowserAgentActivationState | undefined;
   readonly snapshot: BrowserCapabilitySnapshot | undefined;
 }
 
@@ -73,11 +79,14 @@ export class BrowserModelCatalogState {
     const published: PublishedBrowserModel[] = [];
     const publicModels = new Set<string>();
     const routeTokens = new Set<string>();
+    const profile: BrowserModelProfile =
+      this.#source.agentActivation?.active === true ? "agent-v2" : "text-v1";
     for (const model of snapshot.capabilities.models) {
       const route = Object.freeze({
         catalogRevision: snapshot.capabilities.catalogRevision,
         defaultReasoningEffort: model.defaultReasoningEffort,
         modelId: model.id,
+        profile,
         sessionGeneration: snapshot.generation,
         sessionId: snapshot.sessionId,
       });
@@ -99,8 +108,13 @@ export class BrowserModelCatalogState {
       );
       const definition = Object.freeze({
         defaultReasoningEffort: model.defaultReasoningEffort,
-        description: "ChatGPT Web model discovered in the explicitly selected tab.",
-        displayName: truncateDisplayName(`Web · ${model.displayName}`),
+        description:
+          profile === "agent-v2"
+            ? "ChatGPT Web model available through the active Web Agent consent lease."
+            : "ChatGPT Web model discovered in the explicitly selected tab.",
+        displayName: truncateDisplayName(
+          `${profile === "agent-v2" ? "Web Agent" : "Web"} · ${model.displayName}`,
+        ),
         publicKey: publicModel,
         supportedReasoningEfforts,
       });
@@ -135,6 +149,7 @@ function createPublicModelKey(route: BrowserModelRoute): string {
         route.sessionGeneration,
         route.catalogRevision,
         route.modelId,
+        route.profile,
       ]),
       "utf8",
     )

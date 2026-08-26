@@ -10,6 +10,7 @@ describe("browser model route token", () => {
     const route = {
       catalogRevision: "catalog-revision:42",
       modelId: "chatgpt/web-model-5.6",
+      profile: "text-v1" as const,
       sessionGeneration: 7,
       sessionId: "session-a",
     };
@@ -26,6 +27,7 @@ describe("browser model route token", () => {
     );
     expect(createBrowserModelRouteToken({ ...route, sessionGeneration: 8 })).not.toBe(token);
     expect(createBrowserModelRouteToken({ ...route, sessionId: "session-b" })).not.toBe(token);
+    expect(createBrowserModelRouteToken({ ...route, profile: "agent-v2" })).not.toBe(token);
   });
 
   it.each([
@@ -44,6 +46,7 @@ describe("browser model route token", () => {
       createBrowserModelRouteToken({
         catalogRevision: "has space",
         modelId: "model",
+        profile: "text-v1",
         sessionGeneration: 1,
         sessionId: "session-a",
       }),
@@ -52,6 +55,7 @@ describe("browser model route token", () => {
       createBrowserModelRouteToken({
         catalogRevision: "catalog",
         modelId: "has space",
+        profile: "text-v1",
         sessionGeneration: 1,
         sessionId: "session-a",
       }),
@@ -60,7 +64,17 @@ describe("browser model route token", () => {
       createBrowserModelRouteToken({
         catalogRevision: "catalog",
         modelId: "model",
+        profile: "text-v1",
         sessionGeneration: 0,
+        sessionId: "session-a",
+      }),
+    ).toThrow();
+    expect(() =>
+      createBrowserModelRouteToken({
+        catalogRevision: "catalog",
+        modelId: "model",
+        profile: "unknown" as "text-v1",
+        sessionGeneration: 1,
         sessionId: "session-a",
       }),
     ).toThrow();

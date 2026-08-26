@@ -1,7 +1,10 @@
 import {
+  AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS,
+  AGENT_WORKFLOW_PROTOCOL_VERSION,
   BRIDGE_ERROR_CODES,
   NATIVE_MESSAGING_PROTOCOL_VERSION,
   type BrowserCapabilities,
+  type ActiveAgentStatusSnapshot,
 } from "@gpt-session-bridge/protocol";
 import { describe, expect, it } from "vitest";
 
@@ -209,6 +212,128 @@ describe("BrowserSessionCoordinator", () => {
     );
     expect(ready.coordinator.snapshot?.generation).toBe(2);
     expect(ready.coordinator.snapshot?.capabilities.catalogRevision).toBe("catalog-b");
+  });
+
+  it("tracks authenticated Web Agent activation and renews only the exact lease", async () => {
+    let now = 1_000;
+    const ready = await readyCoordinator({ now: () => now });
+    expect(ready.coordinator.agentActivation).toEqual({ active: false });
+
+    const active = activeAgentStatus({ lastActivityAtMs: now, revision: 1 });
+    await ready.coordinator.receive(
+      ready.lease,
+      frame("agent/status/changed", "event-agent-active", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        sessionId: ready.sessionId,
+        status: active,
+      }),
+    );
+    expect(ready.coordinator.agentActivation).toEqual({ active: true });
+    expect(ready.coordinator.activeAgentStatus).toEqual(active);
+    expect(Object.isFrozen(ready.coordinator.activeAgentStatus?.binding)).toBe(true);
+
+    now = 2_000;
+    const renewing = ready.coordinator.noteAgentActivity(active);
+    const note = sent(ready.port, "agent/activity/note");
+    expect(note.payload).toMatchObject({ expected: active, sessionId: ready.sessionId });
+    const renewed = activeAgentStatus({ lastActivityAtMs: now, revision: 2 });
+    await ready.coordinator.receive(
+      ready.lease,
+      frame("agent/status/changed", "event-agent-renewed", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        sessionId: ready.sessionId,
+        status: renewed,
+      }),
+    );
+    await ready.coordinator.receive(
+      ready.lease,
+      frame("agent/activity/result", note.requestId, {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        sessionId: ready.sessionId,
+        status: renewed,
+      }),
+    );
+    await expect(renewing).resolves.toEqual(renewed);
+
+    await expect(ready.coordinator.noteAgentActivity(active)).rejects.toMatchObject({
+      code: BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED,
+    });
+    now = renewed.expiresAtMs;
+    expect(ready.coordinator.agentActivation).toEqual({ active: false });
+  });
+
+  it("fails closed on a redefined Web Agent status revision", async () => {
+    const ready = await readyCoordinator({ now: () => 1_000 });
+    await ready.coordinator.receive(
+      ready.lease,
+      frame("agent/status/changed", "event-agent-active", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        sessionId: ready.sessionId,
+        status: activeAgentStatus({ lastActivityAtMs: 1_000, revision: 1 }),
+      }),
+    );
+
+    await expect(
+      ready.coordinator.receive(
+        ready.lease,
+        frame("agent/status/changed", "event-agent-redefined", {
+          agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+          sessionId: ready.sessionId,
+          status: { revision: 1, state: "inactive" },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: BRIDGE_ERROR_CODES.PROTOCOL_INVALID_MESSAGE });
+    expect(ready.coordinator.agentActivation).toEqual({ active: false });
+    expect(ready.port.closeCount).toBe(1);
+  });
+
+  it("starts Agent turns only through the exact authenticated activation command", async () => {
+    const ready = await readyCoordinator({ now: () => 1_000 });
+    const active = activeAgentStatus({ lastActivityAtMs: 1_000, revision: 1 });
+    await ready.coordinator.receive(
+      ready.lease,
+      frame("agent/status/changed", "event-agent-active", {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        sessionId: ready.sessionId,
+        status: active,
+      }),
+    );
+
+    const handle = ready.coordinator.startAgentTurn(active, turnRequest());
+    const start = sent(ready.port, "agent/turn/start");
+    expect(start.payload).toMatchObject({
+      agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+      expected: active,
+      sessionId: ready.sessionId,
+      temporary: false,
+      turnId: handle.turnId,
+    });
+    expect(messagesOfType(ready.port, "turn/start")).toHaveLength(0);
+
+    await ready.coordinator.receive(
+      ready.lease,
+      frame("turn/started", start.requestId, {
+        sessionId: ready.sessionId,
+        turnId: handle.turnId,
+      }),
+    );
+    await ready.coordinator.receive(
+      ready.lease,
+      frame("turn/completed", "event-agent-complete", {
+        finishReason: "stop",
+        sessionId: ready.sessionId,
+        turnId: handle.turnId,
+      }),
+    );
+    await expect(handle.completion).resolves.toEqual({ finishReason: "stop", kind: "completed" });
+
+    expect(() =>
+      ready.coordinator.startAgentTurn({ ...active, revision: 2 }, turnRequest()),
+    ).toThrow(expect.objectContaining({ code: BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED }));
+    expect(() =>
+      ready.coordinator.startAgentTurn(active, turnRequest({ temporary: true })),
+    ).toThrow(expect.objectContaining({ code: BRIDGE_ERROR_CODES.CAPABILITY_UNSUPPORTED }));
+    expect(messagesOfType(ready.port, "agent/turn/start")).toHaveLength(1);
   });
 
   it("fails closed when a catalog revision is redefined or capacity is exhausted", async () => {
@@ -744,6 +869,7 @@ interface CoordinatorFixtureOptions {
   readonly capabilities?: BrowserCapabilities;
   readonly maxCatalogRevisions?: number;
   readonly maxPendingOperations?: number;
+  readonly now?: () => number;
   readonly scheduler?: BrowserSessionScheduler;
   readonly turnTimeoutMs?: number;
 }
@@ -775,6 +901,15 @@ async function readyCoordinator(
     }),
   );
   await connecting;
+  const agentRead = sent(attached.port, "agent/status/read");
+  await attached.coordinator.receive(
+    attached.lease,
+    frame("agent/status/result", agentRead.requestId, {
+      agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+      sessionId,
+      status: { revision: 0, state: "inactive" },
+    }),
+  );
   return { ...attached, sessionId };
 }
 
@@ -791,6 +926,7 @@ function createCoordinator(options: CoordinatorFixtureOptions = {}): BrowserSess
     ...(options.maxPendingOperations === undefined
       ? {}
       : { maxPendingOperations: options.maxPendingOperations }),
+    ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
     ...(options.turnTimeoutMs === undefined ? {} : { turnTimeoutMs: options.turnTimeoutMs }),
   });
@@ -859,6 +995,21 @@ function capabilities(overrides: Partial<BrowserCapabilities> = {}): BrowserCapa
     temporaryChat: true,
     toolCalls: false,
     ...overrides,
+  };
+}
+
+function activeAgentStatus(
+  overrides: Pick<ActiveAgentStatusSnapshot, "lastActivityAtMs" | "revision">,
+): ActiveAgentStatusSnapshot {
+  return {
+    binding: { documentId: "document-agent", generation: 1, tabId: 7 },
+    conversationOwnershipId: "ownership-agent",
+    expiresAtMs: overrides.lastActivityAtMs + AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS,
+    issuedAtMs: 1_000,
+    lastActivityAtMs: overrides.lastActivityAtMs,
+    leaseId: "lease-agent",
+    revision: overrides.revision,
+    state: "active",
   };
 }
 
