@@ -10,11 +10,16 @@ import {
   CONTENT_SCRIPT_PATH,
   EXTENSION_IMPLEMENTATION_VERSION,
   NATIVE_HOST_NAME,
-  UNAVAILABLE_CATALOG_REVISION,
 } from "../constants.js";
 import type { ChromeApi, ChromePort } from "../platform/chrome-api.js";
 import { BrowserNativeLink, BrowserNativeLinkError } from "../protocol/browser-native-link.js";
-import { createPageProbeMessage, parsePageReadyMessage } from "../protocol/page-messages.js";
+import {
+  PageClientLink,
+  PageClientLinkError,
+  type PageCommandFailedMessage,
+  type PageEventMessage,
+  type PageRuntimeCommandInput,
+} from "../protocol/page-messages.js";
 import type { ExtensionUiReason, UiStatus } from "../protocol/ui-messages.js";
 import {
   selectActiveChatGptTab,
@@ -24,15 +29,23 @@ import {
 
 interface ActivePage {
   readonly generation: number;
+  readonly link: PageClientLink;
   readonly port: ChromePort;
   readonly selected: SelectedDocument;
-  ready: boolean;
 }
 
 interface ActiveNativeConnection {
   readonly generation: number;
   readonly link: BrowserNativeLink;
   readonly port: ChromePort;
+}
+
+interface ActiveTurn {
+  cancelRequestId?: string;
+  readonly requestId: string;
+  readonly sessionId: string;
+  started: boolean;
+  readonly turnId: string;
 }
 
 export interface BrowserTabSessionOptions {
@@ -44,25 +57,32 @@ const MAIN_FRAME_ID = 0;
 const PROTOCOL_VERSION = 1;
 const BRIDGE_ERROR_CODES = Object.freeze({
   CAPABILITY_UNSUPPORTED: "capability.unsupported",
+  BROWSER_STATE_CHANGED: "browser.state_changed",
+  BROWSER_UNAVAILABLE: "browser.unavailable",
+  MODEL_UNAVAILABLE: "model.unavailable",
   PROTOCOL_INVALID_MESSAGE: "protocol.invalid_message",
   SESSION_ALREADY_CONNECTED: "session.already_connected",
   SESSION_NOT_CONNECTED: "session.not_connected",
+  TURN_ALREADY_ACTIVE: "turn.already_active",
   TURN_NOT_FOUND: "turn.not_found",
 } as const satisfies Readonly<Record<string, BridgeErrorCode>>);
 
 /**
- * Owns one user-selected document and one native port. It deliberately exposes
- * no DOM automation: the current shell reports an unavailable adapter and
- * fails every turn closed until a separately reviewed adapter is installed.
+ * Owns one user-selected document, its strict content-script link, and one
+ * native port. DOM work remains confined to that exact injected document.
  */
 export class BrowserTabSession {
   readonly #chrome: ChromeApi;
   readonly #createRequestId: () => string;
   #generation = 0;
   #native: ActiveNativeConnection | undefined;
+  readonly #orphanedCatalogRequestIds = new Set<string>();
+  readonly #orphanedTurns = new Map<string, ActiveTurn>();
   #page: ActivePage | undefined;
+  #pendingCatalogRequestId: string | undefined;
   #sessionId: string | undefined;
   #status: UiStatus = Object.freeze({ reason: "none", state: "idle" });
+  #turn: ActiveTurn | undefined;
 
   public constructor(options: BrowserTabSessionOptions) {
     this.#chrome = options.chrome;
@@ -121,14 +141,15 @@ export class BrowserTabSession {
         documentId: selected.documentId,
         name: CONTENT_PORT_NAME,
       });
-      this.#page = { generation, port, ready: false, selected };
+      const link = new PageClientLink();
+      this.#page = { generation, link, port, selected };
       port.onMessage.addListener((message) => {
         this.#receiveFromPage(generation, message);
       });
       port.onDisconnect.addListener(() => {
         this.#pageDisconnected(generation);
       });
-      port.postMessage(createPageProbeMessage());
+      port.postMessage(link.start());
       return true;
     } catch {
       if (this.#isCurrentConnect(generation)) {
@@ -144,15 +165,19 @@ export class BrowserTabSession {
 
   #receiveFromPage(generation: number, value: unknown): void {
     const page = this.#page;
-    if (page?.generation !== generation || page.ready) {
+    if (page?.generation !== generation) {
       return;
     }
-    if (parsePageReadyMessage(value) === undefined) {
+    try {
+      const event = page.link.receive(value);
+      if (event.type === "page/ready") {
+        this.#openNativeConnection(generation);
+        return;
+      }
+      this.#handlePageEvent(event);
+    } catch {
       this.#terminate("pageUnavailable", "error", "protocol_error");
-      return;
     }
-    page.ready = true;
-    this.#openNativeConnection(generation);
   }
 
   #openNativeConnection(generation: number): void {
@@ -222,7 +247,15 @@ export class BrowserTabSession {
         if (!this.#matchesSession(frame.payload.sessionId)) {
           return this.#sessionNotConnected(frame.requestId);
         }
+        if (this.#pendingCatalogRequestId !== undefined) {
+          this.#orphanedCatalogRequestIds.add(this.#pendingCatalogRequestId);
+        }
+        if (this.#turn !== undefined) {
+          this.#orphanedTurns.set(this.#turn.turnId, this.#turn);
+        }
         this.#sessionId = undefined;
+        this.#pendingCatalogRequestId = undefined;
+        this.#turn = undefined;
         return this.#applicationFrame("session/disconnected", frame.requestId, {
           reason: frame.payload.reason ?? "shutdown",
           sessionId: frame.payload.sessionId,
@@ -231,39 +264,108 @@ export class BrowserTabSession {
         if (!this.#matchesSession(frame.payload.sessionId)) {
           return this.#sessionNotConnected(frame.requestId);
         }
-        return this.#applicationFrame("capabilities/result", frame.requestId, {
-          capabilities: {
-            cancellation: false,
-            catalogRevision: UNAVAILABLE_CATALOG_REVISION,
-            imageInput: false,
-            modelDiscovery: false,
-            models: [],
-            streaming: false,
-            temporaryChat: false,
-            toolCalls: false,
-          },
+        if (
+          this.#pendingCatalogRequestId !== undefined ||
+          this.#turn !== undefined ||
+          this.#hasOrphanedPageOperation()
+        ) {
+          return this.#errorFrame(
+            frame.requestId,
+            BRIDGE_ERROR_CODES.BROWSER_UNAVAILABLE,
+            "Browser model discovery is already active.",
+          );
+        }
+        this.#pendingCatalogRequestId = frame.requestId;
+        if (!this.#sendPage({ requestId: frame.requestId, type: "page/catalog/read" })) {
+          return undefined;
+        }
+        return undefined;
+      case "turn/start": {
+        if (!this.#matchesSession(frame.payload.sessionId)) {
+          return this.#turnFailed(
+            frame,
+            BRIDGE_ERROR_CODES.SESSION_NOT_CONNECTED,
+            "The browser session is not connected.",
+          );
+        }
+        if (this.#turn !== undefined) {
+          return this.#turnFailed(
+            frame,
+            BRIDGE_ERROR_CODES.TURN_ALREADY_ACTIVE,
+            "A browser turn is already active.",
+          );
+        }
+        if (this.#pendingCatalogRequestId !== undefined || this.#hasOrphanedPageOperation()) {
+          return this.#turnFailed(
+            frame,
+            BRIDGE_ERROR_CODES.BROWSER_UNAVAILABLE,
+            "Browser model discovery is still active.",
+          );
+        }
+        if (frame.payload.input.length !== 1) {
+          return this.#turnFailed(
+            frame,
+            BRIDGE_ERROR_CODES.CAPABILITY_UNSUPPORTED,
+            "Exactly one text input is required for a browser turn.",
+          );
+        }
+        if (frame.payload.temporary) {
+          return this.#turnFailed(
+            frame,
+            BRIDGE_ERROR_CODES.CAPABILITY_UNSUPPORTED,
+            "Temporary ChatGPT Web turns are not supported.",
+          );
+        }
+        this.#turn = {
+          requestId: frame.requestId,
           sessionId: frame.payload.sessionId,
-        });
-      case "turn/start":
-        return this.#turnFailed(
-          frame,
-          this.#matchesSession(frame.payload.sessionId)
-            ? BRIDGE_ERROR_CODES.CAPABILITY_UNSUPPORTED
-            : BRIDGE_ERROR_CODES.SESSION_NOT_CONNECTED,
-          this.#matchesSession(frame.payload.sessionId)
-            ? "The browser adapter is not available."
-            : "The browser session is not connected.",
-        );
-      case "turn/cancel":
-        return this.#turnFailed(
-          frame,
-          this.#matchesSession(frame.payload.sessionId)
-            ? BRIDGE_ERROR_CODES.TURN_NOT_FOUND
-            : BRIDGE_ERROR_CODES.SESSION_NOT_CONNECTED,
-          this.#matchesSession(frame.payload.sessionId)
-            ? "The requested browser turn is not active."
-            : "The browser session is not connected.",
-        );
+          started: false,
+          turnId: frame.payload.turnId,
+        };
+        if (
+          !this.#sendPage({
+            catalogRevision: frame.payload.catalogRevision,
+            input: frame.payload.input,
+            modelId: frame.payload.modelId,
+            reasoningEffort: frame.payload.reasoningEffort,
+            requestId: frame.requestId,
+            temporary: false,
+            turnId: frame.payload.turnId,
+            type: "page/turn/start",
+          })
+        ) {
+          return undefined;
+        }
+        return undefined;
+      }
+      case "turn/cancel": {
+        if (!this.#matchesSession(frame.payload.sessionId)) {
+          return this.#turnFailed(
+            frame,
+            BRIDGE_ERROR_CODES.SESSION_NOT_CONNECTED,
+            "The browser session is not connected.",
+          );
+        }
+        const turn = this.#turn;
+        if (turn?.turnId !== frame.payload.turnId || turn.cancelRequestId !== undefined) {
+          return this.#turnFailed(
+            frame,
+            BRIDGE_ERROR_CODES.TURN_NOT_FOUND,
+            "The requested browser turn is not cancellable.",
+          );
+        }
+        turn.cancelRequestId = frame.requestId;
+        if (
+          !this.#sendPage({
+            requestId: frame.requestId,
+            turnId: frame.payload.turnId,
+            type: "page/turn/cancel",
+          })
+        ) {
+          return undefined;
+        }
+        return undefined;
+      }
       case "error":
         this.#terminate("transportLost", "error", "protocol_error");
         return undefined;
@@ -274,6 +376,273 @@ export class BrowserTabSession {
           "The browser extension received an unsupported message.",
         );
     }
+  }
+
+  #handlePageEvent(event: Exclude<PageEventMessage, { readonly type: "page/ready" }>): void {
+    if (this.#drainOrphanedPageEvent(event)) {
+      return;
+    }
+    const sessionId = this.#sessionId;
+    if (sessionId === undefined) {
+      // Passive catalog observations may race the native handshake. Every
+      // command-correlated stale event must have been drained above.
+      if (event.type === "page/catalog/changed") {
+        return;
+      }
+      throw new PageClientLinkError();
+    }
+    switch (event.type) {
+      case "page/catalog/changed":
+        if (this.#pendingCatalogRequestId !== undefined || this.#hasOrphanedPageOperation()) {
+          return;
+        }
+        this.#sendNative(
+          this.#applicationFrame("capabilities/changed", this.#createRequestId(), {
+            capabilities: {
+              cancellation: true,
+              catalogRevision: event.catalogRevision,
+              imageInput: false,
+              modelDiscovery: true,
+              models: [...event.models],
+              streaming: true,
+              temporaryChat: false,
+              toolCalls: false,
+            },
+            sessionId,
+          }),
+        );
+        return;
+      case "page/catalog/result":
+        if (event.requestId !== this.#pendingCatalogRequestId) {
+          throw new PageClientLinkError();
+        }
+        this.#pendingCatalogRequestId = undefined;
+        this.#sendNative(
+          this.#applicationFrame("capabilities/result", event.requestId, {
+            capabilities: {
+              cancellation: true,
+              catalogRevision: event.catalogRevision,
+              imageInput: false,
+              modelDiscovery: true,
+              models: [...event.models],
+              streaming: true,
+              temporaryChat: false,
+              toolCalls: false,
+            },
+            sessionId,
+          }),
+        );
+        return;
+      case "page/turn/started": {
+        const turn = this.#expectPageTurn(event.turnId);
+        if (turn.started || event.requestId !== turn.requestId) {
+          throw new PageClientLinkError();
+        }
+        turn.started = true;
+        this.#sendNative(
+          this.#applicationFrame("turn/started", event.requestId, {
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+          }),
+        );
+        return;
+      }
+      case "page/turn/delta": {
+        const turn = this.#expectStartedPageTurn(event.turnId);
+        this.#sendNative(
+          this.#applicationFrame("turn/delta", turn.requestId, {
+            channel: "outputText",
+            delta: event.delta,
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+          }),
+        );
+        return;
+      }
+      case "page/turn/completed": {
+        const turn = this.#expectStartedPageTurn(event.turnId);
+        this.#turn = undefined;
+        this.#sendNative(
+          this.#applicationFrame("turn/completed", turn.requestId, {
+            finishReason: "stop",
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+          }),
+        );
+        return;
+      }
+      case "page/turn/cancelled": {
+        const turn = this.#expectPageTurn(event.turnId);
+        if (turn.cancelRequestId === undefined || event.requestId !== turn.cancelRequestId) {
+          throw new PageClientLinkError();
+        }
+        this.#turn = undefined;
+        this.#sendNative(
+          this.#applicationFrame("turn/cancelled", event.requestId, {
+            sessionId: turn.sessionId,
+            turnId: turn.turnId,
+          }),
+        );
+        return;
+      }
+      case "page/command/failed":
+        this.#handlePageFailure(event);
+        return;
+    }
+  }
+
+  #drainOrphanedPageEvent(
+    event: Exclude<PageEventMessage, { readonly type: "page/ready" }>,
+  ): boolean {
+    if (
+      (event.type === "page/catalog/result" ||
+        (event.type === "page/command/failed" && event.turnId === undefined)) &&
+      this.#orphanedCatalogRequestIds.delete(event.requestId)
+    ) {
+      return true;
+    }
+    if (
+      event.type !== "page/turn/started" &&
+      event.type !== "page/turn/delta" &&
+      event.type !== "page/turn/completed" &&
+      event.type !== "page/turn/cancelled" &&
+      !(event.type === "page/command/failed" && event.turnId !== undefined)
+    ) {
+      return false;
+    }
+    const turnId = event.turnId;
+    if (turnId === undefined) {
+      return false;
+    }
+    const turn = this.#orphanedTurns.get(turnId);
+    if (turn === undefined) {
+      return false;
+    }
+    switch (event.type) {
+      case "page/turn/started":
+        if (turn.started || event.requestId !== turn.requestId) {
+          throw new PageClientLinkError();
+        }
+        turn.started = true;
+        break;
+      case "page/turn/delta":
+        if (!turn.started) {
+          throw new PageClientLinkError();
+        }
+        break;
+      case "page/turn/completed":
+        if (!turn.started) {
+          throw new PageClientLinkError();
+        }
+        this.#orphanedTurns.delete(turnId);
+        break;
+      case "page/turn/cancelled":
+        if (turn.cancelRequestId === undefined || event.requestId !== turn.cancelRequestId) {
+          throw new PageClientLinkError();
+        }
+        this.#orphanedTurns.delete(turnId);
+        break;
+      case "page/command/failed":
+        if (event.requestId === turn.requestId) {
+          this.#orphanedTurns.delete(turnId);
+        } else if (event.requestId === turn.cancelRequestId) {
+          delete turn.cancelRequestId;
+        } else {
+          throw new PageClientLinkError();
+        }
+        break;
+    }
+    return true;
+  }
+
+  #hasOrphanedPageOperation(): boolean {
+    return this.#orphanedCatalogRequestIds.size > 0 || this.#orphanedTurns.size > 0;
+  }
+
+  #handlePageFailure(event: PageCommandFailedMessage): void {
+    const sessionId = this.#sessionId;
+    if (event.requestId === this.#pendingCatalogRequestId && event.turnId === undefined) {
+      this.#pendingCatalogRequestId = undefined;
+      this.#sendNative(
+        this.#errorFrame(
+          event.requestId,
+          mapPageFailureCode(event.code),
+          event.message,
+          event.retryable,
+        ),
+      );
+      return;
+    }
+    const turn = this.#turn;
+    if (turn === undefined || event.turnId !== turn.turnId || sessionId !== turn.sessionId) {
+      throw new PageClientLinkError();
+    }
+    if (event.requestId === turn.cancelRequestId) {
+      delete turn.cancelRequestId;
+      this.#sendNative(
+        this.#errorFrame(
+          event.requestId,
+          mapPageFailureCode(event.code),
+          event.message,
+          event.retryable,
+        ),
+      );
+      return;
+    }
+    if (event.requestId !== turn.requestId) {
+      throw new PageClientLinkError();
+    }
+    this.#turn = undefined;
+    this.#sendNative(
+      this.#applicationFrame("turn/failed", event.requestId, {
+        error: {
+          code: mapPageFailureCode(event.code),
+          message: event.message,
+          retryable: event.retryable,
+        },
+        sessionId,
+        turnId: turn.turnId,
+      }),
+    );
+  }
+
+  #sendPage(command: PageRuntimeCommandInput): boolean {
+    const page = this.#page;
+    if (page?.link.state !== "ready") {
+      this.#terminate("pageUnavailable", "error", "page_unavailable");
+      return false;
+    }
+    try {
+      page.port.postMessage(page.link.send(command));
+      return true;
+    } catch {
+      this.#terminate("pageUnavailable", "error", "page_unavailable");
+      return false;
+    }
+  }
+
+  #sendNative(frame: NativeMessagingFrame): void {
+    const native = this.#native;
+    if (native?.link.state !== "ready") {
+      throw new BrowserNativeLinkError();
+    }
+    native.port.postMessage(native.link.sendApplication(frame));
+  }
+
+  #expectPageTurn(turnId: string): ActiveTurn {
+    const turn = this.#turn;
+    if (turn?.turnId !== turnId || turn.sessionId !== this.#sessionId) {
+      throw new PageClientLinkError();
+    }
+    return turn;
+  }
+
+  #expectStartedPageTurn(turnId: string): ActiveTurn {
+    const turn = this.#expectPageTurn(turnId);
+    if (!turn.started) {
+      throw new PageClientLinkError();
+    }
+    return turn;
   }
 
   #turnFailed(
@@ -296,9 +665,14 @@ export class BrowserTabSession {
     );
   }
 
-  #errorFrame(requestId: string, code: BridgeErrorCode, message: string): NativeMessagingFrame {
+  #errorFrame(
+    requestId: string,
+    code: BridgeErrorCode,
+    message: string,
+    retryable = false,
+  ): NativeMessagingFrame {
     return this.#applicationFrame("error", requestId, {
-      error: { code, message, retryable: false },
+      error: { code, message, retryable },
     });
   }
 
@@ -346,8 +720,12 @@ export class BrowserTabSession {
     const sessionId = this.#sessionId;
     this.#generation += 1;
     this.#native = undefined;
+    this.#orphanedCatalogRequestIds.clear();
+    this.#orphanedTurns.clear();
     this.#page = undefined;
+    this.#pendingCatalogRequestId = undefined;
     this.#sessionId = undefined;
+    this.#turn = undefined;
 
     if (closeReason !== undefined && sessionId !== undefined && native?.link.state === "ready") {
       try {
@@ -362,6 +740,7 @@ export class BrowserTabSession {
     }
 
     native?.link.close();
+    page?.link.close();
     tryDisconnect(native?.port);
     tryDisconnect(page?.port);
     this.#setStatus(state, reason);
@@ -377,5 +756,22 @@ function tryDisconnect(port: ChromePort | undefined): void {
     port?.disconnect();
   } catch {
     // A disconnected Chrome port is already in the desired terminal state.
+  }
+}
+
+function mapPageFailureCode(code: PageCommandFailedMessage["code"]): BridgeErrorCode {
+  switch (code) {
+    case "adapter_unavailable":
+      return BRIDGE_ERROR_CODES.BROWSER_UNAVAILABLE;
+    case "browser_state_changed":
+      return BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED;
+    case "model_unavailable":
+      return BRIDGE_ERROR_CODES.MODEL_UNAVAILABLE;
+    case "turn_already_active":
+      return BRIDGE_ERROR_CODES.TURN_ALREADY_ACTIVE;
+    case "turn_not_found":
+      return BRIDGE_ERROR_CODES.TURN_NOT_FOUND;
+    case "unsupported":
+      return BRIDGE_ERROR_CODES.CAPABILITY_UNSUPPORTED;
   }
 }

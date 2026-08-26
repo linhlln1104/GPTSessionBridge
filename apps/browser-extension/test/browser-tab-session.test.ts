@@ -15,7 +15,7 @@ import type {
 import { BrowserTabSession } from "../src/session/browser-tab-session.js";
 
 describe("BrowserTabSession", () => {
-  it("connects only the injected document and reports unavailable capabilities", async () => {
+  it("connects only the injected document and relays a dynamic Web catalog", async () => {
     const harness = new ChromeHarness();
     const session = harness.createSession();
 
@@ -30,11 +30,14 @@ describe("BrowserTabSession", () => {
       options: { documentId: "document-1", name: "gptsessionbridge-page-v1" },
       tabId: 7,
     });
-    expect(harness.pagePort.sent).toEqual([{ protocolVersion: 1, type: "page/probe" }]);
+    expect(harness.pagePort.sent).toEqual([
+      { protocolVersion: 1, sequence: 0, type: "page/probe" },
+    ]);
 
     harness.pagePort.emitMessage({
-      adapter: "unavailable",
+      adapter: "chatgpt-dom-v1",
       protocolVersion: 1,
+      sequence: 0,
       type: "page/ready",
     });
     expect(harness.nativeApplication).toBe("com.gptsessionbridge.native_host.dev");
@@ -59,14 +62,24 @@ describe("BrowserTabSession", () => {
     harness.nativePort.emitMessage(
       applicationFrame(2, "capabilities/read", { sessionId: "session-1" }),
     );
+    expect(harness.pagePort.sent[1]).toEqual({
+      protocolVersion: 1,
+      requestId: "incoming-2",
+      sequence: 1,
+      type: "page/catalog/read",
+    });
+    harness.pagePort.emitMessage(pageCatalogResult(1, "incoming-2"));
     expect(harness.nativeFrame(2)).toMatchObject({
       sequence: 2,
       type: "capabilities/result",
       payload: {
         capabilities: {
+          cancellation: true,
           imageInput: false,
-          modelDiscovery: false,
-          models: [],
+          modelDiscovery: true,
+          models: [webModel()],
+          streaming: true,
+          temporaryChat: false,
           toolCalls: false,
         },
         sessionId: "session-1",
@@ -74,7 +87,7 @@ describe("BrowserTabSession", () => {
     });
   });
 
-  it("fails a turn without an adapter and never simulates output", async () => {
+  it("relays one text-only streaming turn from the selected page", async () => {
     const harness = new ChromeHarness();
     const session = harness.createSession();
     await harness.connectAndHandshake(session);
@@ -82,10 +95,14 @@ describe("BrowserTabSession", () => {
       applicationFrame(1, "session/connect", { sessionId: "session-1" }),
     );
     harness.nativePort.emitMessage(
-      applicationFrame(2, "turn/start", {
-        catalogRevision: "catalog-1",
+      applicationFrame(2, "capabilities/read", { sessionId: "session-1" }),
+    );
+    harness.pagePort.emitMessage(pageCatalogResult(1, "incoming-2"));
+    harness.nativePort.emitMessage(
+      applicationFrame(3, "turn/start", {
+        catalogRevision: catalogRevision(),
         input: [{ text: "hello", type: "text" }],
-        modelId: "gptsessionbridge/web/example-model",
+        modelId: webModel().id,
         reasoningEffort: "medium",
         sessionId: "session-1",
         temporary: false,
@@ -93,17 +110,337 @@ describe("BrowserTabSession", () => {
       }),
     );
 
-    expect(harness.nativeFrame(2)).toMatchObject({
-      type: "turn/failed",
+    expect(harness.pagePort.sent[2]).toMatchObject({
+      protocolVersion: 1,
+      requestId: "incoming-3",
+      sequence: 2,
+      turnId: "turn-1",
+      type: "page/turn/start",
+    });
+    harness.pagePort.emitMessage({
+      protocolVersion: 1,
+      requestId: "incoming-3",
+      sequence: 2,
+      turnId: "turn-1",
+      type: "page/turn/started",
+    });
+    harness.pagePort.emitMessage({
+      delta: "hello from Web",
+      protocolVersion: 1,
+      sequence: 3,
+      turnId: "turn-1",
+      type: "page/turn/delta",
+    });
+    harness.pagePort.emitMessage({
+      protocolVersion: 1,
+      sequence: 4,
+      turnId: "turn-1",
+      type: "page/turn/completed",
+    });
+
+    expect(harness.nativeFrame(3)).toMatchObject({
+      type: "turn/started",
+      payload: { sessionId: "session-1", turnId: "turn-1" },
+    });
+    expect(harness.nativeFrame(4)).toMatchObject({
+      type: "turn/delta",
       payload: {
-        error: { code: "capability.unsupported", retryable: false },
+        channel: "outputText",
+        delta: "hello from Web",
         sessionId: "session-1",
         turnId: "turn-1",
       },
     });
-    expect(
-      harness.nativePort.sent.some((frame) => (frame as { type?: unknown }).type === "turn/delta"),
-    ).toBe(false);
+    expect(harness.nativeFrame(5)).toMatchObject({
+      type: "turn/completed",
+      payload: { finishReason: "stop", sessionId: "session-1", turnId: "turn-1" },
+    });
+  });
+
+  it("relays catalog changes observed from the visible picker", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(2, "capabilities/read", { sessionId: "session-1" }),
+    );
+    harness.pagePort.emitMessage(pageCatalogResult(1, "incoming-2"));
+    harness.pagePort.emitMessage({
+      catalogRevision: `web-ui-${"c".repeat(64)}`,
+      models: [{ ...webModel(), displayName: "New Web Model" }],
+      protocolVersion: 1,
+      sequence: 2,
+      type: "page/catalog/changed",
+    });
+
+    expect(harness.nativeFrame(3)).toMatchObject({
+      requestId: "request-2",
+      type: "capabilities/changed",
+      payload: {
+        capabilities: {
+          catalogRevision: `web-ui-${"c".repeat(64)}`,
+          models: [{ displayName: "New Web Model" }],
+        },
+        sessionId: "session-1",
+      },
+    });
+  });
+
+  it("ignores a valid catalog observation before a native session is connected", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.pagePort.emitMessage({
+      catalogRevision: `web-ui-${"c".repeat(64)}`,
+      models: [webModel()],
+      protocolVersion: 1,
+      sequence: 1,
+      type: "page/catalog/changed",
+    });
+
+    expect(session.status).toEqual({ reason: "none", state: "connected" });
+    expect(harness.nativePort.sent).toHaveLength(1);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    expect(harness.nativeFrame(1)).toMatchObject({
+      type: "session/connected",
+      payload: { sessionId: "session-1" },
+    });
+  });
+
+  it("drains a stale catalog result after reconnect before allowing another read", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(2, "capabilities/read", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(3, "session/disconnect", { sessionId: "session-1" }),
+    );
+    expect(harness.nativeFrame(2)).toMatchObject({
+      type: "session/disconnected",
+      payload: { reason: "shutdown", sessionId: "session-1" },
+    });
+    harness.nativePort.emitMessage(
+      applicationFrame(4, "session/connect", { sessionId: "session-2" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(5, "capabilities/read", { sessionId: "session-2" }),
+    );
+    expect(harness.nativeFrame(4)).toMatchObject({
+      requestId: "incoming-5",
+      type: "error",
+      payload: { error: { code: "browser.unavailable" } },
+    });
+    expect(harness.pagePort.sent).toHaveLength(2);
+
+    harness.pagePort.emitMessage(pageCatalogResult(1, "incoming-2"));
+    expect(session.status).toEqual({ reason: "none", state: "connected" });
+    expect(harness.nativePort.sent).toHaveLength(5);
+
+    harness.nativePort.emitMessage(
+      applicationFrame(6, "capabilities/read", { sessionId: "session-2" }),
+    );
+    expect(harness.pagePort.sent[2]).toMatchObject({
+      requestId: "incoming-6",
+      sequence: 2,
+      type: "page/catalog/read",
+    });
+  });
+
+  it("drains stale turn events after reconnect without attaching them to a new session", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(applicationFrame(2, "turn/start", turnPayload("turn-old")));
+    harness.nativePort.emitMessage(
+      applicationFrame(3, "session/disconnect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(4, "session/connect", { sessionId: "session-2" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(5, "turn/start", {
+        ...turnPayload("turn-new"),
+        sessionId: "session-2",
+      }),
+    );
+
+    expect(harness.nativeFrame(4)).toMatchObject({
+      requestId: "incoming-5",
+      type: "turn/failed",
+      payload: { error: { code: "browser.unavailable" }, turnId: "turn-new" },
+    });
+    expect(harness.pagePort.sent).toHaveLength(2);
+
+    harness.pagePort.emitMessage({
+      protocolVersion: 1,
+      requestId: "incoming-2",
+      sequence: 1,
+      turnId: "turn-old",
+      type: "page/turn/started",
+    });
+    harness.pagePort.emitMessage({
+      protocolVersion: 1,
+      sequence: 2,
+      turnId: "turn-old",
+      type: "page/turn/completed",
+    });
+    expect(session.status).toEqual({ reason: "none", state: "connected" });
+    expect(harness.nativePort.sent).toHaveLength(5);
+
+    harness.nativePort.emitMessage(
+      applicationFrame(6, "turn/start", {
+        ...turnPayload("turn-new"),
+        sessionId: "session-2",
+      }),
+    );
+    expect(harness.pagePort.sent[2]).toMatchObject({
+      requestId: "incoming-6",
+      sequence: 2,
+      turnId: "turn-new",
+      type: "page/turn/start",
+    });
+  });
+
+  it("correlates a confirmed page cancellation", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(applicationFrame(2, "turn/start", turnPayload("turn-1")));
+    harness.pagePort.emitMessage({
+      protocolVersion: 1,
+      requestId: "incoming-2",
+      sequence: 1,
+      turnId: "turn-1",
+      type: "page/turn/started",
+    });
+    harness.nativePort.emitMessage(
+      applicationFrame(3, "turn/cancel", { sessionId: "session-1", turnId: "turn-1" }),
+    );
+    expect(harness.pagePort.sent[2]).toMatchObject({
+      requestId: "incoming-3",
+      sequence: 2,
+      turnId: "turn-1",
+      type: "page/turn/cancel",
+    });
+    harness.pagePort.emitMessage({
+      protocolVersion: 1,
+      requestId: "incoming-3",
+      sequence: 2,
+      turnId: "turn-1",
+      type: "page/turn/cancelled",
+    });
+
+    expect(harness.nativeFrame(3)).toMatchObject({
+      requestId: "incoming-3",
+      type: "turn/cancelled",
+      payload: { sessionId: "session-1", turnId: "turn-1" },
+    });
+  });
+
+  it("maps bounded page failures without leaking page diagnostics", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(2, "capabilities/read", { sessionId: "session-1" }),
+    );
+    harness.pagePort.emitMessage({
+      code: "adapter_unavailable",
+      message: "A verified ChatGPT Web model picker is unavailable.",
+      protocolVersion: 1,
+      requestId: "incoming-2",
+      retryable: true,
+      sequence: 1,
+      type: "page/command/failed",
+    });
+
+    expect(harness.nativeFrame(2)).toMatchObject({
+      requestId: "incoming-2",
+      type: "error",
+      payload: { error: { code: "browser.unavailable", retryable: true } },
+    });
+  });
+
+  it("rejects temporary Web turns before touching the page", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(2, "turn/start", { ...turnPayload("turn-1"), temporary: true }),
+    );
+
+    expect(harness.nativeFrame(2)).toMatchObject({
+      type: "turn/failed",
+      payload: { error: { code: "capability.unsupported" }, turnId: "turn-1" },
+    });
+    expect(harness.pagePort.sent).toHaveLength(1);
+  });
+
+  it("rejects multiple text items before touching the selected page", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    const payload = turnPayload("turn-1");
+    harness.nativePort.emitMessage(
+      applicationFrame(2, "turn/start", {
+        ...payload,
+        input: [
+          { text: "first", type: "text" },
+          { text: "second", type: "text" },
+        ],
+      }),
+    );
+
+    expect(harness.nativeFrame(2)).toMatchObject({
+      type: "turn/failed",
+      payload: { error: { code: "capability.unsupported" }, turnId: "turn-1" },
+    });
+    expect(harness.pagePort.sent).toHaveLength(1);
+  });
+
+  it("does not run model discovery concurrently with an active page turn", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(applicationFrame(2, "turn/start", turnPayload("turn-1")));
+    harness.nativePort.emitMessage(
+      applicationFrame(3, "capabilities/read", { sessionId: "session-1" }),
+    );
+
+    expect(harness.nativeFrame(2)).toMatchObject({
+      requestId: "incoming-3",
+      type: "error",
+      payload: { error: { code: "browser.unavailable" } },
+    });
+    expect(harness.pagePort.sent).toHaveLength(2);
   });
 
   it("rejects unsupported pages before injecting a content script", async () => {
@@ -158,6 +495,22 @@ describe("BrowserTabSession", () => {
     expect(session.status).toEqual({ reason: "protocol_error", state: "error" });
     expect(harness.nativePort.disconnected).toBe(true);
     expect(harness.pagePort.disconnected).toBe(true);
+  });
+
+  it("terminates when either selected document transport is lost", async () => {
+    const pageHarness = new ChromeHarness();
+    const pageSession = pageHarness.createSession();
+    await pageHarness.connectAndHandshake(pageSession);
+    pageHarness.pagePort.onDisconnect.emit();
+    expect(pageSession.status).toEqual({ reason: "page_unavailable", state: "error" });
+    expect(pageHarness.nativePort.disconnected).toBe(true);
+
+    const nativeHarness = new ChromeHarness();
+    const nativeSession = nativeHarness.createSession();
+    await nativeHarness.connectAndHandshake(nativeSession);
+    nativeHarness.nativePort.onDisconnect.emit();
+    expect(nativeSession.status).toEqual({ reason: "native_unavailable", state: "error" });
+    expect(nativeHarness.pagePort.disconnected).toBe(true);
   });
 
   it("does not resurrect a connection cancelled while the active-tab query is pending", async () => {
@@ -327,8 +680,9 @@ class ChromeHarness {
   public async connectAndHandshake(session: BrowserTabSession): Promise<void> {
     await session.connect();
     this.pagePort.emitMessage({
-      adapter: "unavailable",
+      adapter: "chatgpt-dom-v1",
       protocolVersion: 1,
+      sequence: 0,
       type: "page/ready",
     });
     this.nativePort.emitMessage(helloAcknowledgedFrame());
@@ -388,7 +742,8 @@ function helloAcknowledgedFrame(): NativeMessagingFrame {
 
 function applicationFrame(
   sequence: number,
-  type: "capabilities/read" | "session/connect" | "turn/start",
+  type:
+    "capabilities/read" | "session/connect" | "session/disconnect" | "turn/cancel" | "turn/start",
   payload: unknown,
 ): NativeMessagingFrame {
   return nativeMessagingFrameSchema.parse({
@@ -398,4 +753,58 @@ function applicationFrame(
     sequence,
     type,
   });
+}
+
+function turnPayload(turnId: string): Readonly<Record<string, unknown>> {
+  return {
+    catalogRevision: catalogRevision(),
+    input: [{ text: "hello", type: "text" }],
+    modelId: webModel().id,
+    reasoningEffort: "medium",
+    sessionId: "session-1",
+    temporary: false,
+    turnId,
+  };
+}
+
+function catalogRevision(): string {
+  return `web-ui-${"a".repeat(64)}`;
+}
+
+function webModel(): {
+  readonly defaultReasoningEffort: "medium";
+  readonly displayName: "Web Model";
+  readonly id: string;
+  readonly inputModalities: readonly ["text"];
+  readonly supportedReasoningEfforts: readonly [
+    {
+      readonly description: "Compatibility label only; it does not control ChatGPT Web reasoning, which remains UI-defined.";
+      readonly reasoningEffort: "medium";
+    },
+  ];
+} {
+  return {
+    defaultReasoningEffort: "medium",
+    displayName: "Web Model",
+    id: `ui-web-model-${"b".repeat(24)}`,
+    inputModalities: ["text"],
+    supportedReasoningEfforts: [
+      {
+        description:
+          "Compatibility label only; it does not control ChatGPT Web reasoning, which remains UI-defined.",
+        reasoningEffort: "medium",
+      },
+    ],
+  };
+}
+
+function pageCatalogResult(sequence: number, requestId: string): Readonly<Record<string, unknown>> {
+  return {
+    catalogRevision: catalogRevision(),
+    models: [webModel()],
+    protocolVersion: 1,
+    requestId,
+    sequence,
+    type: "page/catalog/result",
+  };
 }

@@ -10,4 +10,3 @@ export const EXTENSION_IMPLEMENTATION_VERSION = BRIDGE_IMPLEMENTATION_VERSION;
 export const NATIVE_HOST_NAME = NATIVE_MESSAGING_HOST_NAME;
 export const PAGE_PROTOCOL_VERSION = 1 as const;
 export const POPUP_PATH = "popup/popup.html" as const;
-export const UNAVAILABLE_CATALOG_REVISION = "browser-adapter-unavailable-v1" as const;

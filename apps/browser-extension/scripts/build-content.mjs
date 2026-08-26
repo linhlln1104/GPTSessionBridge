@@ -1,8 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { build } from "vite";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const inputFile = resolve(appRoot, "src/content/content-script.ts");
@@ -16,22 +16,27 @@ if (
   throw new Error("Refusing to write to an unexpected content-script output path.");
 }
 
-const source = await readFile(inputFile, "utf8");
-const result = ts.transpileModule(source, {
-  compilerOptions: {
-    ignoreDeprecations: "6.0",
-    module: ts.ModuleKind.None,
-    moduleDetection: ts.ModuleDetectionKind.Legacy,
-    sourceMap: false,
-    target: ts.ScriptTarget.ES2024,
+await build({
+  build: {
+    emptyOutDir: false,
+    minify: false,
+    outDir: outputDirectory,
+    rollupOptions: {
+      input: inputFile,
+      output: {
+        entryFileNames: "content-script.js",
+        format: "iife",
+      },
+    },
+    sourcemap: false,
+    target: "chrome106",
   },
-  fileName: inputFile,
-  reportDiagnostics: true,
+  configFile: false,
+  logLevel: "warn",
+  publicDir: false,
 });
 
-if ((result.diagnostics?.length ?? 0) > 0 || /^\s*(?:export|import)\b/mu.test(result.outputText)) {
-  throw new Error("The content script did not compile as a self-contained classic script.");
+const source = await readFile(outputFile, "utf8");
+if (/^\s*(?:export|import)\b/mu.test(source)) {
+  throw new Error("The content script did not bundle as a self-contained classic script.");
 }
-
-await mkdir(outputDirectory, { recursive: true });
-await writeFile(outputFile, result.outputText, "utf8");

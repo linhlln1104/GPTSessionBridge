@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
+import type { WebModelDescriptor } from "@gpt-session-bridge/protocol";
 
-import { createPageProbeMessage, parsePageReadyMessage } from "../src/protocol/page-messages.js";
+import {
+  createPageProbeMessage,
+  PageClientLink,
+  PageClientLinkError,
+  PageServerLink,
+  parsePageCommand,
+  parsePageEvent,
+  parsePageReadyMessage,
+} from "../src/protocol/page-messages.js";
 import { parseUiRequest, parseUiResponse } from "../src/protocol/ui-messages.js";
 import {
   isExactChatGptUrl,
@@ -86,28 +95,78 @@ describe("internal extension messages", () => {
   });
 
   it("uses a strict fail-closed page probe", () => {
-    expect(createPageProbeMessage()).toEqual({ protocolVersion: 1, type: "page/probe" });
+    expect(createPageProbeMessage()).toEqual({
+      protocolVersion: 1,
+      sequence: 0,
+      type: "page/probe",
+    });
+    expect(
+      parsePageReadyMessage({
+        adapter: "chatgpt-dom-v1",
+        protocolVersion: 1,
+        sequence: 0,
+        type: "page/ready",
+      }),
+    ).toEqual({
+      adapter: "chatgpt-dom-v1",
+      protocolVersion: 1,
+      sequence: 0,
+      type: "page/ready",
+    });
     expect(
       parsePageReadyMessage({
         adapter: "unavailable",
         protocolVersion: 1,
-        type: "page/ready",
-      }),
-    ).toEqual({ adapter: "unavailable", protocolVersion: 1, type: "page/ready" });
-    expect(
-      parsePageReadyMessage({
-        adapter: "available",
-        protocolVersion: 1,
+        sequence: 0,
         type: "page/ready",
       }),
     ).toBeUndefined();
     expect(
       parsePageReadyMessage({
-        adapter: "unavailable",
+        adapter: "chatgpt-dom-v1",
         extra: true,
         protocolVersion: 1,
+        sequence: 0,
         type: "page/ready",
       }),
     ).toBeUndefined();
   });
+
+  it("enforces exact, bounded, monotonic page commands and events", () => {
+    const client = new PageClientLink();
+    const server = new PageServerLink();
+    const probe = client.start();
+    expect(server.receive(probe)).toEqual(probe);
+    const ready = server.ready();
+    expect(client.receive(ready)).toEqual(ready);
+
+    const read = client.send({ requestId: "request-1", type: "page/catalog/read" });
+    expect(server.receive(read)).toEqual(read);
+    const changed = server.send({
+      catalogRevision: `web-ui-${"a".repeat(64)}`,
+      models: [pageModel()],
+      type: "page/catalog/changed",
+    });
+    expect(client.receive(changed)).toEqual(changed);
+
+    expect(parsePageCommand({ ...read, extra: true })).toBeUndefined();
+    expect(parsePageEvent({ ...changed, models: [] })).toBeUndefined();
+    expect(() => server.receive(read)).toThrow(PageClientLinkError);
+  });
 });
+
+function pageModel(): WebModelDescriptor {
+  return {
+    defaultReasoningEffort: "medium",
+    displayName: "Web Model",
+    id: `ui-web-model-${"b".repeat(24)}`,
+    inputModalities: ["text"],
+    supportedReasoningEfforts: [
+      {
+        description:
+          "Compatibility label only; it does not control ChatGPT Web reasoning, which remains UI-defined.",
+        reasoningEffort: "medium",
+      },
+    ],
+  };
+}

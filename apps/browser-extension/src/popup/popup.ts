@@ -61,7 +61,7 @@ function describeStatus(status: UiStatus): string {
 
   switch (status.state) {
     case "connected":
-      return "This ChatGPT tab is connected. Model automation is not enabled yet.";
+      return "Connected for text-only Web turns. Keep this bridge-owned conversation open.";
     case "connecting":
       return "Connecting this ChatGPT tab…";
     case "error":
