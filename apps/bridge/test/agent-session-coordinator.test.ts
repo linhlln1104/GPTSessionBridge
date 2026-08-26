@@ -172,6 +172,9 @@ describe("AgentSessionCoordinator", () => {
 
     expect(prompt).toContain("Web Agent protocol v2 compatibility projection");
     expect(prompt).toContain("synthetic-visible-request");
+    expect(prompt).toContain("For every response, return exactly three lines");
+    expect(prompt).toContain('TOOL_CALL_SHAPE {"arguments":{},"challenge":');
+    expect(prompt).toContain('FINAL_SHAPE {"challenge":');
     for (const privateValue of [
       request.browser.documentId,
       request.browser.leaseId,
@@ -373,10 +376,10 @@ describe("AgentSessionCoordinator", () => {
   it("pins every browser, document, model, provider, session, and lease field", async () => {
     const mutations: readonly Partial<AgentBrowserBinding>[] = [
       { catalogRevision: "catalog-drift" },
-      { conversationPath: "/c/drift" },
+      { conversationOwnershipId: "ownership-drift" },
       { documentId: "document-drift" },
       { expiresAtMs: NOW + 20_000 },
-      { firstUserMessageId: "message-drift" },
+      { documentGeneration: 2 },
       { issuedAtMs: NOW - 2_000 },
       { lastActivityAtMs: NOW - 2_000 },
       { leaseId: "lease-drift" },
@@ -978,10 +981,10 @@ function createCoordinator(
 function browserBinding(overrides: Partial<AgentBrowserBinding> = {}): AgentBrowserBinding {
   return {
     catalogRevision: "catalog-private-canary",
-    conversationPath: "/c/owned-private-canary",
+    conversationOwnershipId: "ownership-private-canary",
+    documentGeneration: 1,
     documentId: "document-private-canary",
     expiresAtMs: NOW + 60_000,
-    firstUserMessageId: "message-private-canary",
     issuedAtMs: NOW - 1_000,
     lastActivityAtMs: NOW - 500,
     leaseId: "lease-private-canary",

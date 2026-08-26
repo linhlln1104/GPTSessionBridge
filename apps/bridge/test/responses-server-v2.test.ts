@@ -20,7 +20,7 @@ const itemId = "fc_abcdefghijklmnop";
 const callId = "call_abcdefghijklmnop";
 const callRef = "wc_abcdefghijklmnop";
 
-describe("ResponsesServerV2 inactive boundary", () => {
+describe("ResponsesServerV2 contract boundary", () => {
   it("strictly admits the certified initial Codex request subset", () => {
     const server = createServer();
     const request = initialRequest();
@@ -510,7 +510,7 @@ describe("ResponsesServerV2 inactive boundary", () => {
       ]),
     ).toThrow(RangeError);
     expect(() => profileServerWithTools([{ ...baseTool, description: "" }])).toThrow(RangeError);
-    expect(() =>
+    expect(
       profileServerWithTools([
         {
           ...baseTool,
@@ -522,7 +522,7 @@ describe("ResponsesServerV2 inactive boundary", () => {
           },
         },
       ]),
-    ).toThrow(RangeError);
+    ).toBeInstanceOf(ResponsesServerV2);
     expect(() =>
       profileServerWithTools([
         {

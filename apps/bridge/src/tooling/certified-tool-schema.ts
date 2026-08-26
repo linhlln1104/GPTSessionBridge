@@ -58,8 +58,9 @@ const COMPOSITION_KEYS = ["allOf", "anyOf", "oneOf"] as const;
 
 /**
  * Validates the deliberately small, reference-free JSON Schema subset that a
- * certified Web Agent profile may advertise. Objects are always closed and
- * every declared property is required, matching strict Responses tools.
+ * certified Web Agent profile may advertise. Objects are always closed. A
+ * required list may describe either every property (strict Responses tools)
+ * or only the properties required by the current Codex function contract.
  */
 export function isCertifiedToolParametersSchema(value: unknown): value is JsonObject {
   try {
@@ -176,16 +177,12 @@ function isSchemaNode(value: unknown, root: boolean): value is JsonObject {
     if (
       !hasObjectType ||
       !isPlainRecord(properties) ||
-      !isUniqueStringArray(required) ||
+      (required !== undefined && !isUniqueStringArray(required)) ||
       additionalProperties !== false
     ) {
       return false;
     }
-    const propertyKeys = Object.keys(properties);
-    if (
-      required.length !== propertyKeys.length ||
-      !required.every((key) => Object.hasOwn(properties, key))
-    ) {
+    if (required !== undefined && !required.every((key) => Object.hasOwn(properties, key))) {
       return false;
     }
     for (const child of Object.values(properties)) {

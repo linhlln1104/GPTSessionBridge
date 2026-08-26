@@ -298,10 +298,10 @@ class FakeAgentBoundary implements AgentBrowserTurnBoundary {
 function browserBinding(): AgentBrowserBinding {
   return Object.freeze({
     catalogRevision: "catalog-fixture",
-    conversationPath: "/c/owned-fixture",
+    conversationOwnershipId: "ownership-fixture",
+    documentGeneration: 1,
     documentId: "document-fixture",
     expiresAtMs: NOW + 60_000,
-    firstUserMessageId: "message-fixture",
     issuedAtMs: NOW - 1_000,
     lastActivityAtMs: NOW - 500,
     leaseId: "lease-fixture",

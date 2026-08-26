@@ -17,9 +17,9 @@ import {
 } from "../tooling/certified-tool-schema.js";
 
 /**
- * This module is an inactive protocol-v2 boundary. It deliberately has no
- * listener, browser transport, approval, sandbox, or tool-execution API.
- * Runtime activation remains a separate release decision under ADR 0005.
+ * Strict request and lifecycle boundary used by the activation-gated v2
+ * runtime. It deliberately has no browser transport, approval, sandbox, or
+ * tool-execution API; those responsibilities remain outside this codec.
  */
 
 export const MAX_RESPONSES_V2_REQUEST_BYTES = 512 * 1024;
@@ -102,7 +102,7 @@ export interface ResponsesV2FunctionTool {
   readonly description: string;
   readonly name: string;
   readonly parameters: JsonObject;
-  readonly strict: true;
+  readonly strict: boolean;
   readonly type: "function";
 }
 
@@ -918,7 +918,7 @@ function parseFunctionTools(value: unknown): ResponsesV2FunctionTool[] | undefin
     }
     if (
       item["type"] !== "function" ||
-      item["strict"] !== true ||
+      typeof item["strict"] !== "boolean" ||
       !isNonEmptyBoundedUnicodeText(item["description"], MAX_TOOL_DESCRIPTION_BYTES) ||
       typeof item["name"] !== "string" ||
       item["name"].length > MAX_TOOL_NAME_CHARACTERS ||
@@ -934,7 +934,7 @@ function parseFunctionTools(value: unknown): ResponsesV2FunctionTool[] | undefin
         description: item["description"],
         name: item["name"],
         parameters: item["parameters"],
-        strict: true as const,
+        strict: item["strict"],
         type: "function" as const,
       }),
     );

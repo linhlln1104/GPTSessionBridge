@@ -7,7 +7,7 @@ import {
 } from "../src/tooling/certified-tool-schema.js";
 
 describe("certified tool schema meta-validation", () => {
-  it("accepts only a closed root object with an exact required set", () => {
+  it("accepts closed root objects with exact or optional declared properties", () => {
     expect(isCertifiedToolParametersSchema(objectSchema({}))).toBe(true);
     expect(
       isCertifiedToolParametersSchema(
@@ -17,6 +17,21 @@ describe("certified tool schema meta-validation", () => {
         }),
       ),
     ).toBe(true);
+    expect(
+      isCertifiedToolParametersSchema({
+        additionalProperties: false,
+        properties: { optional: { type: "string" }, required: { type: "integer" } },
+        required: ["required"],
+        type: "object",
+      }),
+    ).toBe(true);
+    expect(
+      isCertifiedToolParametersSchema({
+        additionalProperties: false,
+        properties: { optional: { type: "string" } },
+        type: "object",
+      }),
+    ).toBe(true);
 
     for (const schema of [
       { type: "string" },
@@ -24,12 +39,6 @@ describe("certified tool schema meta-validation", () => {
       { type: ["object", "null"], properties: {}, required: [], additionalProperties: false },
       { type: "object", properties: {}, required: [] },
       { type: "object", properties: {}, required: [], additionalProperties: true },
-      {
-        type: "object",
-        properties: { value: { type: "string" } },
-        required: [],
-        additionalProperties: false,
-      },
       {
         type: "object",
         properties: { value: { type: "string" } },
@@ -241,6 +250,30 @@ describe("certified tool argument matching", () => {
     );
     expect(matchesCertifiedToolArguments(schema, { count: 2.5, label: "ok" })).toBe(false);
     expect(matchesCertifiedToolArguments(schema, { count: 2, label: false })).toBe(false);
+  });
+
+  it("allows omitted optional properties while still rejecting undeclared properties", () => {
+    const schema: JsonObject = {
+      additionalProperties: false,
+      properties: { optional: { type: "string" }, required: { type: "integer" } },
+      required: ["required"],
+      type: "object",
+    };
+    expect(matchesCertifiedToolArguments(schema, { required: 1 })).toBe(true);
+    expect(matchesCertifiedToolArguments(schema, { optional: "ok", required: 1 })).toBe(true);
+    expect(matchesCertifiedToolArguments(schema, { optional: "ok" })).toBe(false);
+    expect(matchesCertifiedToolArguments(schema, { extra: true, required: 1 })).toBe(false);
+  });
+
+  it("treats an omitted required list as an all-optional closed object", () => {
+    const schema: JsonObject = {
+      additionalProperties: false,
+      properties: { cursor: { type: "string" } },
+      type: "object",
+    };
+    expect(matchesCertifiedToolArguments(schema, {})).toBe(true);
+    expect(matchesCertifiedToolArguments(schema, { cursor: "next" })).toBe(true);
+    expect(matchesCertifiedToolArguments(schema, { extra: true })).toBe(false);
   });
 
   it("matches nested arrays and closed objects recursively", () => {
