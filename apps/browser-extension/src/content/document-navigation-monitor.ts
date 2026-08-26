@@ -1,6 +1,7 @@
 const NAVIGATION_POLL_INTERVAL_MS = 250;
 
 export interface DocumentNavigationMonitorOptions {
+  readonly decideChange?: (previousUrl: string, nextUrl: string) => "adopt" | "defer" | "reject";
   readonly document: Document;
   readonly onChanged: () => void;
   readonly window: Window;
@@ -13,7 +14,7 @@ export interface DocumentNavigationMonitorOptions {
  * not mutate the visible document.
  */
 export function observeDocumentNavigation(options: DocumentNavigationMonitorOptions): () => void {
-  const initialUrl = options.window.location.href;
+  let acceptedUrl = options.window.location.href;
   let stopped = false;
 
   const stop = (): void => {
@@ -27,7 +28,24 @@ export function observeDocumentNavigation(options: DocumentNavigationMonitorOpti
     options.window.clearInterval(interval);
   };
   const check = (): void => {
-    if (!stopped && options.window.location.href !== initialUrl) {
+    if (stopped) {
+      return;
+    }
+    const nextUrl = options.window.location.href;
+    if (nextUrl === acceptedUrl) {
+      return;
+    }
+    let decision: "adopt" | "defer" | "reject";
+    try {
+      decision = options.decideChange?.(acceptedUrl, nextUrl) ?? "reject";
+    } catch {
+      decision = "reject";
+    }
+    if (decision === "adopt") {
+      acceptedUrl = nextUrl;
+      return;
+    }
+    if (decision === "reject") {
       stop();
       options.onChanged();
     }

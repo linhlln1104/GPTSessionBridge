@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  NATIVE_MESSAGING_PROTOCOL_VERSION,
+  nativeMessagingFrameSchema,
+} from "@gpt-session-bridge/protocol";
 
 import { installServiceWorker } from "../src/background/service-worker-runtime.js";
 import type { ChromeApi, ChromeMessageSender, ChromePort } from "../src/platform/chrome-api.js";
@@ -81,10 +85,17 @@ describe("service-worker popup boundary", () => {
     const hello = harness.nativePort.sent[0] as Readonly<Record<string, unknown>>;
     harness.nativePort.emitMessage({
       payload: { implementationVersion: "0.1.0", peer: "nativeHost" },
-      protocolVersion: 1,
+      protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
       requestId: hello["requestId"],
       sequence: 0,
       type: "hello/acknowledged",
+    });
+    harness.nativePort.emitMessage({
+      payload: { sessionId: "session-1" },
+      protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
+      requestId: "session-connect",
+      sequence: 1,
+      type: "session/connect",
     });
 
     const activated = await sendPopupRequest(listener, sender, {
@@ -113,12 +124,47 @@ describe("service-worker popup boundary", () => {
     expect(JSON.stringify(activation)).not.toContain("document-1");
     expect(JSON.stringify(activation)).not.toContain("lease");
 
+    const changed = nativeMessagingFrameSchema.parse(harness.nativePort.sent[2]);
+    expect(changed).toMatchObject({
+      type: "agent/status/changed",
+      payload: {
+        sessionId: "session-1",
+        status: {
+          binding: { documentId: "document-1", generation: 1, tabId: 7 },
+          revision: 1,
+          state: "active",
+        },
+      },
+    });
+    if (changed.type !== "agent/status/changed" || changed.payload.status.state !== "active") {
+      throw new Error("Expected an active agent status event.");
+    }
+    harness.nativePort.emitMessage({
+      payload: { expected: changed.payload.status, sessionId: "session-1" },
+      protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
+      requestId: "agent-activity",
+      sequence: 2,
+      type: "agent/activity/note",
+    });
+    expect(nativeMessagingFrameSchema.parse(harness.nativePort.sent[3])).toMatchObject({
+      type: "agent/status/changed",
+      payload: { status: { revision: 2, state: "active" } },
+    });
+    expect(nativeMessagingFrameSchema.parse(harness.nativePort.sent[4])).toMatchObject({
+      requestId: "agent-activity",
+      type: "agent/activity/result",
+      payload: { status: { revision: 2, state: "active" } },
+    });
+
     const statusRead = await sendPopupRequest(listener, sender, { type: "ui/status/read" });
-    expect((statusRead as Record<string, unknown>)["activation"]).toEqual(activation);
+    const renewedUiActivation = (statusRead as Record<string, unknown>)["activation"];
+    expect(renewedUiActivation).toMatchObject({ revision: 2, state: "active" });
+    expect(JSON.stringify(renewedUiActivation)).not.toContain("ownership");
+    expect(JSON.stringify(renewedUiActivation)).not.toContain("lease");
 
     const disconnected = await sendPopupRequest(listener, sender, { type: "ui/disconnect" });
     expect(disconnected).toMatchObject({
-      activation: { reason: "disconnected", revision: 2, state: "inactive" },
+      activation: { reason: "disconnected", revision: 3, state: "inactive" },
       ok: true,
     });
   });
@@ -139,7 +185,7 @@ describe("service-worker popup boundary", () => {
     const hello = harness.nativePort.sent[0] as Readonly<Record<string, unknown>>;
     harness.nativePort.emitMessage({
       payload: { implementationVersion: "0.1.0", peer: "nativeHost" },
-      protocolVersion: 1,
+      protocolVersion: NATIVE_MESSAGING_PROTOCOL_VERSION,
       requestId: hello["requestId"],
       sequence: 0,
       type: "hello/acknowledged",

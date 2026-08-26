@@ -213,6 +213,45 @@ describe("internal extension messages", () => {
     expect(parsePageEvent({ ...changed, models: [] })).toBeUndefined();
     expect(() => server.receive(read)).toThrow(PageClientLinkError);
   });
+
+  it("keeps one-shot agent permits out of regular turns and rejects replay", () => {
+    const client = new PageClientLink();
+    const server = new PageServerLink();
+    server.receive(client.start());
+    client.receive(server.ready());
+    const activation = activeAgentStatus();
+    const commandInput = {
+      catalogRevision: `web-ui-${"a".repeat(64)}`,
+      input: [{ text: "GSB/2 BEGIN\n{}\nGSB/2 END", type: "text" }],
+      modelId: pageModel().id,
+      permit: { activation, turnId: "turn-agent" },
+      reasoningEffort: "medium",
+      requestId: "request-agent",
+      temporary: false,
+      turnId: "turn-agent",
+      type: "page/agent/turn/start",
+    } as const;
+    const command = client.send(commandInput);
+    expect(server.receive(command)).toEqual(command);
+    expect(
+      parsePageCommand({
+        ...command,
+        permit: { activation, turnId: "turn-other" },
+      }),
+    ).toBeUndefined();
+    expect(
+      parsePageCommand({
+        ...command,
+        type: "page/turn/start",
+      }),
+    ).toBeUndefined();
+
+    const replay = client.send({
+      ...commandInput,
+      requestId: "request-agent-replay",
+    });
+    expect(() => server.receive(replay)).toThrow(PageClientLinkError);
+  });
 });
 
 function pageModel(): WebModelDescriptor {
@@ -228,6 +267,19 @@ function pageModel(): WebModelDescriptor {
         reasoningEffort: "medium",
       },
     ],
+  };
+}
+
+function activeAgentStatus() {
+  return {
+    binding: { documentId: "document-1", generation: 1, tabId: 7 },
+    conversationOwnershipId: "ownership-1",
+    expiresAtMs: 901_000,
+    issuedAtMs: 1_000,
+    lastActivityAtMs: 1_000,
+    leaseId: "lease-1",
+    revision: 1,
+    state: "active" as const,
   };
 }
 

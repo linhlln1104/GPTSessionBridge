@@ -4,6 +4,7 @@ import {
   ChatGptDomAdapter,
   ChatGptDomAdapterError,
   type AdapterFailure,
+  type ChatGptDomAgentSink,
   type ChatGptDomAdapterSink,
 } from "./chatgpt-dom-adapter.js";
 import { CHATGPT_ORIGIN, CONTENT_PORT_NAME } from "../constants.js";
@@ -72,7 +73,8 @@ function installContentRuntime(): void {
 }
 
 class ContentRuntime {
-  readonly #adapter = new ChatGptDomAdapter({ driver: new BrowserChatGptUiDriver() });
+  readonly #driver = new BrowserChatGptUiDriver();
+  readonly #adapter = new ChatGptDomAdapter({ driver: this.#driver });
   readonly #link = new PageServerLink();
   readonly #port: ContentPort;
   readonly #stopCatalogObservation: () => void;
@@ -80,6 +82,7 @@ class ContentRuntime {
   #active:
     | {
         readonly requestId: string;
+        readonly mode: "agent" | "text";
         readonly turnId: string;
       }
     | undefined;
@@ -90,6 +93,7 @@ class ContentRuntime {
   public constructor(port: ContentPort) {
     this.#port = port;
     this.#stopNavigationObservation = observeDocumentNavigation({
+      decideChange: (previousUrl, nextUrl) => this.#driver.decideNavigation(previousUrl, nextUrl),
       document,
       onChanged: () => {
         if (this.#closed) {
@@ -167,8 +171,14 @@ class ContentRuntime {
       case "page/turn/start":
         await this.#startTurn(command);
         return;
+      case "page/agent/turn/start":
+        await this.#startAgentTurn(command);
+        return;
       case "page/turn/cancel":
-        await this.#cancelTurn(command.requestId, command.turnId);
+        await this.#cancelTurn(command.requestId, command.turnId, "text");
+        return;
+      case "page/agent/turn/cancel":
+        await this.#cancelTurn(command.requestId, command.turnId, "agent");
         return;
     }
   }
@@ -202,7 +212,11 @@ class ContentRuntime {
       );
       return;
     }
-    const active = Object.freeze({ requestId: command.requestId, turnId: command.turnId });
+    const active = Object.freeze({
+      mode: "text" as const,
+      requestId: command.requestId,
+      turnId: command.turnId,
+    });
     this.#active = active;
     try {
       await this.#adapter.startTurn(command, this.#createSink(command.requestId));
@@ -216,8 +230,45 @@ class ContentRuntime {
     }
   }
 
-  async #cancelTurn(requestId: string, turnId: string): Promise<void> {
-    if (this.#active?.turnId !== turnId || this.#cancelRequestId !== undefined) {
+  async #startAgentTurn(
+    command: Extract<PageCommandMessage, { readonly type: "page/agent/turn/start" }>,
+  ): Promise<void> {
+    if (this.#active !== undefined) {
+      this.#sendFailure(
+        command.requestId,
+        {
+          code: "turn_already_active",
+          message: "A ChatGPT Web turn is already active.",
+          retryable: false,
+        },
+        command.turnId,
+      );
+      return;
+    }
+    const active = Object.freeze({
+      mode: "agent" as const,
+      requestId: command.requestId,
+      turnId: command.turnId,
+    });
+    this.#active = active;
+    try {
+      await this.#adapter.startAgentTurn(command, this.#createAgentSink(command.requestId));
+    } catch (error) {
+      if (this.#active !== active) {
+        return;
+      }
+      this.#active = undefined;
+      this.#cancelRequestId = undefined;
+      this.#sendFailure(command.requestId, normalizeFailure(error), command.turnId);
+    }
+  }
+
+  async #cancelTurn(requestId: string, turnId: string, mode: "agent" | "text"): Promise<void> {
+    if (
+      this.#active?.turnId !== turnId ||
+      this.#active.mode !== mode ||
+      this.#cancelRequestId !== undefined
+    ) {
       this.#sendFailure(
         requestId,
         {
@@ -269,6 +320,43 @@ class ContentRuntime {
       },
       started: (turnId) => {
         if (this.#active?.turnId === turnId) {
+          this.#send({ requestId: startRequestId, turnId, type: "page/turn/started" });
+        }
+      },
+    };
+    return Object.freeze(sink);
+  }
+
+  #createAgentSink(startRequestId: string): ChatGptDomAgentSink {
+    const sink: ChatGptDomAgentSink = {
+      cancelled: (turnId) => {
+        const requestId = this.#cancelRequestId ?? startRequestId;
+        if (this.#finishTurn(turnId)) {
+          this.#send({ requestId, turnId, type: "page/turn/cancelled" });
+        }
+      },
+      completed: (turnId, outputText) => {
+        if (this.#active?.turnId !== turnId || this.#active.mode !== "agent") {
+          return;
+        }
+        for (let offset = 0; offset < outputText.length; offset += 16_384) {
+          this.#send({
+            delta: outputText.slice(offset, offset + 16_384),
+            turnId,
+            type: "page/turn/delta",
+          });
+        }
+        if (this.#finishTurn(turnId)) {
+          this.#send({ turnId, type: "page/turn/completed" });
+        }
+      },
+      failed: (turnId, failure) => {
+        if (this.#finishTurn(turnId)) {
+          this.#sendFailure(startRequestId, failure, turnId);
+        }
+      },
+      started: (turnId) => {
+        if (this.#active?.turnId === turnId && this.#active.mode === "agent") {
           this.#send({ requestId: startRequestId, turnId, type: "page/turn/started" });
         }
       },

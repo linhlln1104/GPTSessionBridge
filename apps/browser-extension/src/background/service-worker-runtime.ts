@@ -2,6 +2,10 @@ import { POPUP_PATH } from "../constants.js";
 import { ToolActivationLease } from "../activation/tool-activation-lease.js";
 import type { ChromeApi, ChromeMessageSender } from "../platform/chrome-api.js";
 import {
+  matchesActiveAgentStatusSnapshot,
+  toAgentStatusSnapshot,
+} from "../protocol/tool-activation.js";
+import {
   parseUiRequest,
   toUiToolActivationStatus,
   type UiRequest,
@@ -17,8 +21,9 @@ export interface InstalledServiceWorker {
 
 export function installServiceWorker(chrome: ChromeApi): InstalledServiceWorker {
   const activation = new ToolActivationLease({
+    createConversationOwnershipId: () => globalThis.crypto.randomUUID(),
     createLeaseId: () => globalThis.crypto.randomUUID(),
-    now: () => Math.floor(globalThis.performance.timeOrigin + globalThis.performance.now()),
+    now: () => Date.now(),
     scheduleTimer: (callback, delayMs) => {
       const handle = globalThis.setTimeout(callback, delayMs);
       return () => {
@@ -29,10 +34,27 @@ export function installServiceWorker(chrome: ChromeApi): InstalledServiceWorker 
   const session = new BrowserTabSession({
     chrome,
     createRequestId: () => globalThis.crypto.randomUUID(),
+    noteAgentActivity: (expected) => {
+      const current = activation.snapshot;
+      if (
+        current.state !== "active" ||
+        !matchesActiveAgentStatusSnapshot(current, expected) ||
+        !activation.noteAgentActivity(current)
+      ) {
+        return undefined;
+      }
+      const renewed = toAgentStatusSnapshot(activation.snapshot);
+      return renewed.state === "active" ? renewed : undefined;
+    },
+    readAgentStatus: () => toAgentStatusSnapshot(activation.snapshot),
     onDocumentInvalidated: (reason) => {
       activation.invalidate(reason);
     },
   });
+  activation.subscribe((event) => {
+    session.updateAgentStatus(toAgentStatusSnapshot(event.snapshot));
+  });
+  session.updateAgentStatus(toAgentStatusSnapshot(activation.snapshot));
   const popupUrl = chrome.runtime.getURL(POPUP_PATH);
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

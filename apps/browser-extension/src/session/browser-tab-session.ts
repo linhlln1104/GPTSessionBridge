@@ -1,5 +1,8 @@
 import type {
+  ActiveAgentStatusSnapshot,
+  AgentStatusSnapshot,
   BridgeErrorCode,
+  BrowserCapabilities,
   NativeMessagingFrame,
   NativeMessagingFrameOf,
   SessionCloseReason,
@@ -45,6 +48,7 @@ interface ActiveTurn {
   cancelRequestId?: string;
   readonly requestId: string;
   readonly sessionId: string;
+  readonly mode: "agent" | "text";
   started: boolean;
   readonly turnId: string;
 }
@@ -52,11 +56,18 @@ interface ActiveTurn {
 export interface BrowserTabSessionOptions {
   readonly chrome: ChromeApi;
   readonly createRequestId: () => string;
+  readonly noteAgentActivity?: (
+    expected: ActiveAgentStatusSnapshot,
+  ) => ActiveAgentStatusSnapshot | undefined;
+  readonly readAgentStatus?: () => AgentStatusSnapshot;
   readonly onDocumentInvalidated?: (reason: "disconnected" | "document_replaced") => void;
 }
 
 const MAIN_FRAME_ID = 0;
-const PROTOCOL_VERSION = 1;
+const AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS = 900_000;
+const AGENT_WORKFLOW_PROTOCOL_VERSION = 2;
+const MAX_AGENT_PERMITS_PER_DOCUMENT = 64;
+const PROTOCOL_VERSION = 2;
 const BRIDGE_ERROR_CODES = Object.freeze({
   CAPABILITY_UNSUPPORTED: "capability.unsupported",
   BROWSER_STATE_CHANGED: "browser.state_changed",
@@ -76,8 +87,14 @@ const BRIDGE_ERROR_CODES = Object.freeze({
 export class BrowserTabSession {
   readonly #chrome: ChromeApi;
   readonly #createRequestId: () => string;
+  readonly #noteAgentActivity:
+    ((expected: ActiveAgentStatusSnapshot) => ActiveAgentStatusSnapshot | undefined) | undefined;
   readonly #onDocumentInvalidated:
     ((reason: "disconnected" | "document_replaced") => void) | undefined;
+  readonly #readAgentStatus: (() => AgentStatusSnapshot) | undefined;
+  #agentStatus: AgentStatusSnapshot = Object.freeze({ revision: 0, state: "inactive" });
+  #catalog: BrowserCapabilities | undefined;
+  readonly #consumedAgentPermits = new Set<string>();
   #generation = 0;
   #native: ActiveNativeConnection | undefined;
   readonly #orphanedCatalogRequestIds = new Set<string>();
@@ -91,7 +108,9 @@ export class BrowserTabSession {
   public constructor(options: BrowserTabSessionOptions) {
     this.#chrome = options.chrome;
     this.#createRequestId = options.createRequestId;
+    this.#noteAgentActivity = options.noteAgentActivity;
     this.#onDocumentInvalidated = options.onDocumentInvalidated;
+    this.#readAgentStatus = options.readAgentStatus;
   }
 
   public get status(): UiStatus {
@@ -113,6 +132,26 @@ export class BrowserTabSession {
       generation: page.generation,
       tabId: page.selected.tabId,
     });
+  }
+
+  /** Publishes a local consent-lease transition to the authenticated session. */
+  public updateAgentStatus(status: AgentStatusSnapshot): void {
+    const next = cloneAgentStatus(status);
+    if (sameAgentStatus(this.#agentStatus, next)) {
+      return;
+    }
+    this.#agentStatus = next;
+    const sessionId = this.#sessionId;
+    if (sessionId === undefined || this.#native?.link.state !== "ready") {
+      return;
+    }
+    this.#sendNative(
+      this.#applicationFrame("agent/status/changed", this.#createRequestId(), {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        sessionId,
+        status: next,
+      }),
+    );
   }
 
   /**
@@ -344,6 +383,41 @@ export class BrowserTabSession {
           return undefined;
         }
         return undefined;
+      case "agent/status/read":
+        if (!this.#matchesSession(frame.payload.sessionId)) {
+          return this.#sessionNotConnected(frame.requestId);
+        }
+        return this.#applicationFrame("agent/status/result", frame.requestId, {
+          agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+          sessionId: frame.payload.sessionId,
+          status: this.#readCurrentAgentStatus(),
+        });
+      case "agent/activity/note": {
+        if (!this.#matchesSession(frame.payload.sessionId)) {
+          return this.#sessionNotConnected(frame.requestId);
+        }
+        const current = this.#readCurrentAgentStatus();
+        if (current.state !== "active" || !sameActiveAgentStatus(current, frame.payload.expected)) {
+          return this.#staleAgentLease(frame.requestId);
+        }
+        let renewed: ActiveAgentStatusSnapshot | undefined;
+        try {
+          renewed = this.#noteAgentActivity?.(frame.payload.expected);
+        } catch {
+          renewed = undefined;
+        }
+        if (renewed === undefined || !isValidRenewal(current, renewed)) {
+          return this.#staleAgentLease(frame.requestId);
+        }
+        this.updateAgentStatus(renewed);
+        return this.#applicationFrame("agent/activity/result", frame.requestId, {
+          agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+          sessionId: frame.payload.sessionId,
+          status: renewed,
+        });
+      }
+      case "agent/turn/start":
+        return this.#startAgentTurn(frame);
       case "turn/start": {
         if (!this.#matchesSession(frame.payload.sessionId)) {
           return this.#turnFailed(
@@ -381,6 +455,7 @@ export class BrowserTabSession {
           );
         }
         this.#turn = {
+          mode: "text",
           requestId: frame.requestId,
           sessionId: frame.payload.sessionId,
           started: false,
@@ -423,7 +498,7 @@ export class BrowserTabSession {
           !this.#sendPage({
             requestId: frame.requestId,
             turnId: frame.payload.turnId,
-            type: "page/turn/cancel",
+            type: turn.mode === "agent" ? "page/agent/turn/cancel" : "page/turn/cancel",
           })
         ) {
           return undefined;
@@ -464,18 +539,10 @@ export class BrowserTabSession {
         if (this.#pendingCatalogRequestId !== undefined || this.#hasOrphanedPageOperation()) {
           return;
         }
+        this.#catalog = capabilitiesFromPageCatalog(event.catalogRevision, event.models);
         this.#sendNative(
           this.#applicationFrame("capabilities/changed", this.#createRequestId(), {
-            capabilities: {
-              cancellation: true,
-              catalogRevision: event.catalogRevision,
-              imageInput: false,
-              modelDiscovery: true,
-              models: [...event.models],
-              streaming: true,
-              temporaryChat: false,
-              toolCalls: false,
-            },
+            capabilities: this.#catalog,
             sessionId,
           }),
         );
@@ -485,18 +552,10 @@ export class BrowserTabSession {
           throw new PageClientLinkError();
         }
         this.#pendingCatalogRequestId = undefined;
+        this.#catalog = capabilitiesFromPageCatalog(event.catalogRevision, event.models);
         this.#sendNative(
           this.#applicationFrame("capabilities/result", event.requestId, {
-            capabilities: {
-              cancellation: true,
-              catalogRevision: event.catalogRevision,
-              imageInput: false,
-              modelDiscovery: true,
-              models: [...event.models],
-              streaming: true,
-              temporaryChat: false,
-              toolCalls: false,
-            },
+            capabilities: this.#catalog,
             sessionId,
           }),
         );
@@ -557,6 +616,89 @@ export class BrowserTabSession {
         this.#handlePageFailure(event);
         return;
     }
+  }
+
+  #startAgentTurn(
+    frame: NativeMessagingFrameOf<"agent/turn/start">,
+  ): NativeMessagingFrame | undefined {
+    if (!this.#matchesSession(frame.payload.sessionId)) {
+      return this.#turnFailed(
+        frame,
+        BRIDGE_ERROR_CODES.SESSION_NOT_CONNECTED,
+        "The browser session is not connected.",
+      );
+    }
+    if (this.#turn !== undefined) {
+      return this.#turnFailed(
+        frame,
+        BRIDGE_ERROR_CODES.TURN_ALREADY_ACTIVE,
+        "A browser turn is already active.",
+      );
+    }
+    if (this.#pendingCatalogRequestId !== undefined || this.#hasOrphanedPageOperation()) {
+      return this.#turnFailed(
+        frame,
+        BRIDGE_ERROR_CODES.BROWSER_UNAVAILABLE,
+        "Browser model discovery is still active.",
+      );
+    }
+    const current = this.#readCurrentAgentStatus();
+    if (current.state !== "active" || !sameActiveAgentStatus(current, frame.payload.expected)) {
+      return this.#turnFailed(
+        frame,
+        BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED,
+        "The agent activation lease or selected document changed.",
+      );
+    }
+    const catalog = this.#catalog;
+    const model = catalog?.models.find((candidate) => candidate.id === frame.payload.modelId);
+    if (
+      catalog?.catalogRevision !== frame.payload.catalogRevision ||
+      model?.supportedReasoningEfforts.some(
+        (option) => option.reasoningEffort === frame.payload.reasoningEffort,
+      ) !== true
+    ) {
+      return this.#turnFailed(
+        frame,
+        BRIDGE_ERROR_CODES.MODEL_UNAVAILABLE,
+        "The selected ChatGPT Web model is no longer available.",
+      );
+    }
+    const permitKey = agentPermitKey(current, frame.payload.turnId);
+    if (
+      this.#consumedAgentPermits.size >= MAX_AGENT_PERMITS_PER_DOCUMENT ||
+      this.#consumedAgentPermits.has(permitKey)
+    ) {
+      return this.#turnFailed(
+        frame,
+        BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED,
+        "The one-shot agent turn permit was already consumed.",
+      );
+    }
+    this.#consumedAgentPermits.add(permitKey);
+    this.#turn = {
+      mode: "agent",
+      requestId: frame.requestId,
+      sessionId: frame.payload.sessionId,
+      started: false,
+      turnId: frame.payload.turnId,
+    };
+    if (
+      !this.#sendPage({
+        catalogRevision: frame.payload.catalogRevision,
+        input: frame.payload.input,
+        modelId: frame.payload.modelId,
+        permit: { activation: current, turnId: frame.payload.turnId },
+        reasoningEffort: frame.payload.reasoningEffort,
+        requestId: frame.requestId,
+        temporary: false,
+        turnId: frame.payload.turnId,
+        type: "page/agent/turn/start",
+      })
+    ) {
+      return undefined;
+    }
+    return undefined;
   }
 
   #drainOrphanedPageEvent(
@@ -714,7 +856,10 @@ export class BrowserTabSession {
   }
 
   #turnFailed(
-    frame: NativeMessagingFrameOf<"turn/cancel"> | NativeMessagingFrameOf<"turn/start">,
+    frame:
+      | NativeMessagingFrameOf<"agent/turn/start">
+      | NativeMessagingFrameOf<"turn/cancel">
+      | NativeMessagingFrameOf<"turn/start">,
     code: BridgeErrorCode,
     message: string,
   ): NativeMessagingFrame {
@@ -731,6 +876,37 @@ export class BrowserTabSession {
       BRIDGE_ERROR_CODES.SESSION_NOT_CONNECTED,
       "The browser session is not connected.",
     );
+  }
+
+  #staleAgentLease(requestId: string): NativeMessagingFrame {
+    return this.#errorFrame(
+      requestId,
+      BRIDGE_ERROR_CODES.BROWSER_STATE_CHANGED,
+      "The agent activation lease changed before activity was admitted.",
+    );
+  }
+
+  #currentAgentStatus(): AgentStatusSnapshot {
+    const status = this.#agentStatus;
+    if (status.state === "inactive") {
+      return status;
+    }
+    const binding = this.activationBinding;
+    if (binding !== undefined && sameActivationBinding(status.binding, binding)) {
+      return status;
+    }
+    return Object.freeze({ revision: status.revision, state: "inactive" });
+  }
+
+  #readCurrentAgentStatus(): AgentStatusSnapshot {
+    if (this.#readAgentStatus !== undefined) {
+      try {
+        this.updateAgentStatus(this.#readAgentStatus());
+      } catch {
+        return Object.freeze({ revision: this.#agentStatus.revision, state: "inactive" });
+      }
+    }
+    return this.#currentAgentStatus();
   }
 
   #errorFrame(
@@ -788,6 +964,8 @@ export class BrowserTabSession {
     const sessionId = this.#sessionId;
     this.#generation += 1;
     this.#native = undefined;
+    this.#catalog = undefined;
+    this.#consumedAgentPermits.clear();
     this.#orphanedCatalogRequestIds.clear();
     this.#orphanedTurns.clear();
     this.#page = undefined;
@@ -842,6 +1020,91 @@ function sameActivationBinding(
     left.generation === right.generation &&
     left.tabId === right.tabId
   );
+}
+
+function cloneAgentStatus(status: AgentStatusSnapshot): AgentStatusSnapshot {
+  if (status.state === "inactive") {
+    return Object.freeze({ revision: status.revision, state: "inactive" });
+  }
+  return Object.freeze({
+    binding: Object.freeze({ ...status.binding }),
+    conversationOwnershipId: status.conversationOwnershipId,
+    expiresAtMs: status.expiresAtMs,
+    issuedAtMs: status.issuedAtMs,
+    lastActivityAtMs: status.lastActivityAtMs,
+    leaseId: status.leaseId,
+    revision: status.revision,
+    state: "active",
+  });
+}
+
+function sameAgentStatus(left: AgentStatusSnapshot, right: AgentStatusSnapshot): boolean {
+  if (left.state !== right.state) {
+    return false;
+  }
+  if (left.state === "inactive" || right.state === "inactive") {
+    return left.revision === right.revision;
+  }
+  return sameActiveAgentStatus(left, right);
+}
+
+function sameActiveAgentStatus(
+  left: ActiveAgentStatusSnapshot,
+  right: ActiveAgentStatusSnapshot,
+): boolean {
+  return (
+    sameActivationBinding(left.binding, right.binding) &&
+    left.conversationOwnershipId === right.conversationOwnershipId &&
+    left.expiresAtMs === right.expiresAtMs &&
+    left.issuedAtMs === right.issuedAtMs &&
+    left.lastActivityAtMs === right.lastActivityAtMs &&
+    left.leaseId === right.leaseId &&
+    left.revision === right.revision
+  );
+}
+
+function isValidRenewal(
+  previous: ActiveAgentStatusSnapshot,
+  renewed: ActiveAgentStatusSnapshot,
+): boolean {
+  return (
+    sameActivationBinding(previous.binding, renewed.binding) &&
+    previous.conversationOwnershipId === renewed.conversationOwnershipId &&
+    previous.issuedAtMs === renewed.issuedAtMs &&
+    previous.leaseId === renewed.leaseId &&
+    previous.revision < Number.MAX_SAFE_INTEGER &&
+    renewed.revision === previous.revision + 1 &&
+    renewed.lastActivityAtMs >= previous.lastActivityAtMs &&
+    renewed.lastActivityAtMs <= Number.MAX_SAFE_INTEGER - AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS &&
+    renewed.expiresAtMs === renewed.lastActivityAtMs + AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS
+  );
+}
+
+function capabilitiesFromPageCatalog(
+  catalogRevision: string,
+  models: readonly BrowserCapabilities["models"][number][],
+): BrowserCapabilities {
+  return {
+    cancellation: true,
+    catalogRevision,
+    imageInput: false,
+    modelDiscovery: true,
+    models: [...models],
+    streaming: true,
+    temporaryChat: false,
+    toolCalls: false,
+  };
+}
+
+function agentPermitKey(status: ActiveAgentStatusSnapshot, turnId: string): string {
+  return JSON.stringify([
+    status.leaseId,
+    status.revision,
+    status.binding.documentId,
+    status.binding.generation,
+    status.conversationOwnershipId,
+    turnId,
+  ]);
 }
 
 function tryDisconnect(port: ChromePort | undefined): void {

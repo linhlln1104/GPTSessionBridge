@@ -4,8 +4,10 @@ import { ToolActivationLease } from "../src/activation/tool-activation-lease.js"
 import {
   TOOL_ACTIVATION_DISCLOSURE_VERSION,
   TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
+  matchesActiveAgentStatusSnapshot,
   parseToolActivationChangedEvent,
   parseToolActivationSnapshot,
+  toAgentStatusSnapshot,
 } from "../src/protocol/tool-activation.js";
 
 const BINDING = Object.freeze({ documentId: "document-1", generation: 4, tabId: 7 });
@@ -16,6 +18,7 @@ describe("ToolActivationLease", () => {
 
     expect(lease.snapshot).toEqual({
       binding: null,
+      conversationOwnershipId: null,
       disclosureVersion: TOOL_ACTIVATION_DISCLOSURE_VERSION,
       expiresAtMs: null,
       inactivityTimeoutMs: TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
@@ -41,6 +44,7 @@ describe("ToolActivationLease", () => {
     expect(lease.activate(BINDING, TOOL_ACTIVATION_DISCLOSURE_VERSION)).toBe(false);
     expect(lease.snapshot).toEqual({
       binding: BINDING,
+      conversationOwnershipId: "ownership-1",
       disclosureVersion: TOOL_ACTIVATION_DISCLOSURE_VERSION,
       expiresAtMs: 901_000,
       inactivityTimeoutMs: TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
@@ -73,17 +77,23 @@ describe("ToolActivationLease", () => {
     const { clock, lease } = createLease();
     expect(lease.activate(BINDING, TOOL_ACTIVATION_DISCLOSURE_VERSION)).toBe(true);
     clock.advance(300_000);
+    const expected = lease.snapshot;
+    expect(expected.state).toBe("active");
+    if (expected.state !== "active") {
+      throw new Error("Expected an active lease.");
+    }
 
-    expect(lease.noteAgentActivity({ binding: BINDING, leaseId: "another-lease" })).toBe(false);
+    expect(lease.noteAgentActivity({ ...expected, leaseId: "another-lease" })).toBe(false);
     expect(
       lease.noteAgentActivity({
+        ...expected,
         binding: { ...BINDING, generation: BINDING.generation + 1 },
-        leaseId: "lease-1",
       }),
     ).toBe(false);
     expect(lease.snapshot.expiresAtMs).toBe(901_000);
 
-    expect(lease.noteAgentActivity({ binding: BINDING, leaseId: "lease-1" })).toBe(true);
+    expect(lease.noteAgentActivity(expected)).toBe(true);
+    expect(lease.noteAgentActivity(expected)).toBe(false);
     expect(lease.snapshot).toMatchObject({
       expiresAtMs: 1_201_000,
       lastActivityAtMs: 301_000,
@@ -155,6 +165,33 @@ describe("tool activation snapshot contract", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("projects only the immutable wire binding and compares every renewal field", () => {
+    const parsed = parseToolActivationSnapshot(activeSnapshot());
+    expect(parsed?.state).toBe("active");
+    if (parsed?.state !== "active") {
+      throw new Error("Expected an active lease.");
+    }
+    const wire = toAgentStatusSnapshot(parsed);
+    expect(wire).toEqual({
+      binding: BINDING,
+      conversationOwnershipId: "ownership-1",
+      expiresAtMs: 901_000,
+      issuedAtMs: 1_000,
+      lastActivityAtMs: 1_000,
+      leaseId: "lease-1",
+      revision: 1,
+      state: "active",
+    });
+    expect(wire.state).toBe("active");
+    if (wire.state !== "active") {
+      throw new Error("Expected active wire status.");
+    }
+    expect(matchesActiveAgentStatusSnapshot(parsed, wire)).toBe(true);
+    expect(matchesActiveAgentStatusSnapshot(parsed, { ...wire, revision: wire.revision + 1 })).toBe(
+      false,
+    );
+  });
 });
 
 function activeSnapshot(): Readonly<Record<string, unknown>> & {
@@ -162,6 +199,7 @@ function activeSnapshot(): Readonly<Record<string, unknown>> & {
 } {
   return {
     binding: BINDING,
+    conversationOwnershipId: "ownership-1",
     disclosureVersion: TOOL_ACTIVATION_DISCLOSURE_VERSION,
     expiresAtMs: 901_000,
     inactivityTimeoutMs: TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
@@ -177,6 +215,7 @@ function activeSnapshot(): Readonly<Record<string, unknown>> & {
 function createLease(): { readonly clock: FakeClock; readonly lease: ToolActivationLease } {
   const clock = new FakeClock(1_000);
   const lease = new ToolActivationLease({
+    createConversationOwnershipId: () => "ownership-1",
     createLeaseId: () => "lease-1",
     now: () => clock.now,
     scheduleTimer: (callback, delayMs) => clock.schedule(callback, delayMs),

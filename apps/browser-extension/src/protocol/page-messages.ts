@@ -1,4 +1,4 @@
-import type { WebModelDescriptor } from "@gpt-session-bridge/protocol";
+import type { ActiveAgentStatusSnapshot, WebModelDescriptor } from "@gpt-session-bridge/protocol";
 
 import { PAGE_PROTOCOL_VERSION } from "../constants.js";
 
@@ -10,6 +10,8 @@ const MAX_DELTA_CHARACTERS = 16_384;
 const MAX_INPUT_ITEM_CHARACTERS = 65_536;
 const MAX_INPUT_TOTAL_CHARACTERS = 262_144;
 const MAX_SAFE_MESSAGE_CHARACTERS = 256;
+const MAX_AGENT_PERMITS_PER_DOCUMENT = 64;
+const AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS = 900_000;
 
 interface PageEnvelope {
   readonly protocolVersion: typeof PAGE_PROTOCOL_VERSION;
@@ -36,6 +38,29 @@ export interface PageTurnStartMessage extends PageEnvelope {
   readonly type: "page/turn/start";
 }
 
+export interface PageAgentTurnPermit {
+  readonly activation: ActiveAgentStatusSnapshot;
+  readonly turnId: string;
+}
+
+export interface PageAgentTurnStartMessage extends PageEnvelope {
+  readonly catalogRevision: string;
+  readonly input: readonly { readonly text: string; readonly type: "text" }[];
+  readonly modelId: string;
+  readonly permit: PageAgentTurnPermit;
+  readonly reasoningEffort: string;
+  readonly requestId: string;
+  readonly temporary: false;
+  readonly turnId: string;
+  readonly type: "page/agent/turn/start";
+}
+
+export interface PageAgentTurnCancelMessage extends PageEnvelope {
+  readonly requestId: string;
+  readonly turnId: string;
+  readonly type: "page/agent/turn/cancel";
+}
+
 export interface PageTurnCancelMessage extends PageEnvelope {
   readonly requestId: string;
   readonly turnId: string;
@@ -43,7 +68,12 @@ export interface PageTurnCancelMessage extends PageEnvelope {
 }
 
 export type PageCommandMessage =
-  PageCatalogReadMessage | PageProbeMessage | PageTurnCancelMessage | PageTurnStartMessage;
+  | PageAgentTurnCancelMessage
+  | PageAgentTurnStartMessage
+  | PageCatalogReadMessage
+  | PageProbeMessage
+  | PageTurnCancelMessage
+  | PageTurnStartMessage;
 
 export interface PageReadyMessage extends PageEnvelope {
   readonly adapter: typeof PAGE_ADAPTER_ID;
@@ -210,6 +240,7 @@ export class PageClientLink {
 
 /** Strict counterpart embedded in the isolated-world content script. */
 export class PageServerLink {
+  readonly #consumedAgentPermits = new Set<string>();
   #expectedInboundSequence = 0;
   #nextOutboundSequence = 0;
   #state: "awaitingProbe" | "closed" | "ready" = "awaitingProbe";
@@ -232,6 +263,16 @@ export class PageServerLink {
     }
     if (command.type === "page/probe") {
       return this.#reject();
+    }
+    if (command.type === "page/agent/turn/start") {
+      const permitKey = agentPermitKey(command.permit);
+      if (
+        this.#consumedAgentPermits.size >= MAX_AGENT_PERMITS_PER_DOCUMENT ||
+        this.#consumedAgentPermits.has(permitKey)
+      ) {
+        return this.#reject();
+      }
+      this.#consumedAgentPermits.add(permitKey);
     }
     this.#expectedInboundSequence += 1;
     return command;
@@ -284,6 +325,8 @@ export class PageServerLink {
 }
 
 export type PageRuntimeCommandInput =
+  | Omit<PageAgentTurnCancelMessage, keyof PageEnvelope>
+  | Omit<PageAgentTurnStartMessage, keyof PageEnvelope>
   | Omit<PageCatalogReadMessage, keyof PageEnvelope>
   | Omit<PageTurnCancelMessage, keyof PageEnvelope>
   | Omit<PageTurnStartMessage, keyof PageEnvelope>;
@@ -327,8 +370,18 @@ export function parsePageCommand(value: unknown): PageCommandMessage | undefined
         isOpaqueId(value["turnId"], 128)
         ? (value as unknown as PageTurnCancelMessage)
         : undefined;
+    case "page/agent/turn/cancel":
+      return hasExactKeys(value, ["protocolVersion", "requestId", "sequence", "turnId", "type"]) &&
+        isOpaqueId(value["requestId"], 128) &&
+        isOpaqueId(value["turnId"], 128)
+        ? (value as unknown as PageAgentTurnCancelMessage)
+        : undefined;
     case "page/turn/start":
       return isTurnStartMessage(value) ? (value as unknown as PageTurnStartMessage) : undefined;
+    case "page/agent/turn/start":
+      return isAgentTurnStartMessage(value)
+        ? (value as unknown as PageAgentTurnStartMessage)
+        : undefined;
     default:
       return undefined;
   }
@@ -423,6 +476,102 @@ function isTurnStartMessage(value: Record<string, unknown>): boolean {
     total += item["text"].length;
   }
   return total <= MAX_INPUT_TOTAL_CHARACTERS;
+}
+
+function isAgentTurnStartMessage(value: Record<string, unknown>): boolean {
+  return (
+    hasExactKeys(value, [
+      "catalogRevision",
+      "input",
+      "modelId",
+      "permit",
+      "protocolVersion",
+      "reasoningEffort",
+      "requestId",
+      "sequence",
+      "temporary",
+      "turnId",
+      "type",
+    ]) &&
+    isTurnStartFields(value) &&
+    isAgentTurnPermit(value["permit"], value["turnId"])
+  );
+}
+
+function isTurnStartFields(value: Record<string, unknown>): boolean {
+  if (
+    !isOpaqueId(value["catalogRevision"], 128) ||
+    !isModelId(value["modelId"]) ||
+    !isOpaqueId(value["reasoningEffort"], 64) ||
+    !isOpaqueId(value["requestId"], 128) ||
+    value["temporary"] !== false ||
+    !isOpaqueId(value["turnId"], 128) ||
+    !Array.isArray(value["input"]) ||
+    value["input"].length !== 1
+  ) {
+    return false;
+  }
+  const item: unknown = value["input"][0];
+  return (
+    hasExactKeys(item, ["text", "type"]) &&
+    item["type"] === "text" &&
+    typeof item["text"] === "string" &&
+    item["text"].length >= 1 &&
+    item["text"].length <= MAX_INPUT_TOTAL_CHARACTERS
+  );
+}
+
+function isAgentTurnPermit(value: unknown, expectedTurnId: unknown): boolean {
+  return (
+    hasExactKeys(value, ["activation", "turnId"]) &&
+    value["turnId"] === expectedTurnId &&
+    isOpaqueId(value["turnId"], 128) &&
+    isActiveAgentStatus(value["activation"])
+  );
+}
+
+function isActiveAgentStatus(value: unknown): value is ActiveAgentStatusSnapshot {
+  if (
+    !hasExactKeys(value, [
+      "binding",
+      "conversationOwnershipId",
+      "expiresAtMs",
+      "issuedAtMs",
+      "lastActivityAtMs",
+      "leaseId",
+      "revision",
+      "state",
+    ]) ||
+    value["state"] !== "active" ||
+    !hasExactKeys(value["binding"], ["documentId", "generation", "tabId"]) ||
+    !isOpaqueId(value["binding"]["documentId"], 256) ||
+    !isSequence(value["binding"]["generation"]) ||
+    !isSequence(value["binding"]["tabId"]) ||
+    !isOpaqueId(value["conversationOwnershipId"], 128) ||
+    !isSequence(value["expiresAtMs"]) ||
+    !isSequence(value["issuedAtMs"]) ||
+    !isSequence(value["lastActivityAtMs"]) ||
+    !isOpaqueId(value["leaseId"], 128) ||
+    !isSequence(value["revision"])
+  ) {
+    return false;
+  }
+  return (
+    value["issuedAtMs"] <= value["lastActivityAtMs"] &&
+    value["lastActivityAtMs"] <= Number.MAX_SAFE_INTEGER - AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS &&
+    value["expiresAtMs"] === value["lastActivityAtMs"] + AGENT_ACTIVATION_INACTIVITY_TIMEOUT_MS
+  );
+}
+
+function agentPermitKey(permit: PageAgentTurnPermit): string {
+  return JSON.stringify([
+    permit.activation.leaseId,
+    permit.activation.revision,
+    permit.activation.binding.documentId,
+    permit.activation.binding.generation,
+    permit.activation.conversationOwnershipId,
+    permit.turnId,
+  ]);
 }
 
 function isCatalogResult(value: Record<string, unknown>): boolean {

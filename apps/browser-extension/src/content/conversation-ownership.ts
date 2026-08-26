@@ -16,6 +16,14 @@ export class ConversationOwnershipGuard<Message extends object> {
   #conversationPath: string | undefined;
   #ownedUserMessages: readonly Message[] | undefined;
 
+  public get hasOwnership(): boolean {
+    return this.#ownedUserMessages !== undefined;
+  }
+
+  public ownsPath(pathname: string): boolean {
+    return this.#ownedUserMessages !== undefined && this.#conversationPath === pathname;
+  }
+
   public assertSurface(surface: ConversationSurface<Message>): void {
     const owned = this.#ownedUserMessages;
     if (owned === undefined) {

@@ -27,6 +27,38 @@ interface SyntheticChatGptSurface {
   readonly trigger: HTMLButtonElement;
 }
 
+interface SyntheticChatGptSurfaceOptions {
+  readonly onSubmit?: () => void;
+}
+
+const agentEnvelopeFixtures = Object.freeze([
+  Object.freeze({
+    kind: "tool_call" as const,
+    output: `GSB/2 BEGIN\n${JSON.stringify({
+      arguments: { cmd: "Get-ChildItem -Force" },
+      challenge: "A".repeat(32),
+      kind: "tool_call",
+      manifestDigest: `sha256-${"A".repeat(43)}`,
+      round: 0,
+      tool: "exec_command",
+      turn: `wt_${"a".repeat(16)}`,
+      v: 2,
+    })}\nGSB/2 END`,
+  }),
+  Object.freeze({
+    kind: "final" as const,
+    output: `GSB/2 BEGIN\n${JSON.stringify({
+      challenge: "B".repeat(32),
+      kind: "final",
+      manifestDigest: `sha256-${"E".repeat(43)}`,
+      round: 1,
+      text: "Done with non-breaking space:\u00a0and two trailing spaces  ",
+      turn: `wt_${"b".repeat(16)}`,
+      v: 2,
+    })}\nGSB/2 END`,
+  }),
+]);
+
 const activeDrivers = new Set<BrowserChatGptUiDriver>();
 
 beforeEach(() => {
@@ -181,6 +213,170 @@ describe("BrowserChatGptUiDriver in Chrome", () => {
     expect(deltas.join("")).toBe("Visible Chrome delta");
   });
 
+  it.each(agentEnvelopeFixtures)(
+    "preserves a streamed $kind envelope byte-for-byte and adopts only its first owned route",
+    async ({ kind, output: exactOutput }) => {
+      const locationValue = {
+        origin: "https://chatgpt.com",
+        pathname: "/",
+      } as Location;
+      const driverReference: { current?: BrowserChatGptUiDriver } = {};
+      let decisionDuringSubmit: "adopt" | "defer" | "reject" | undefined;
+      let secondDecisionDuringSubmit: "adopt" | "defer" | "reject" | undefined;
+      const surface = mountSyntheticChatGptSurface({
+        onSubmit: () => {
+          locationValue.pathname = "/c/synthetic-owned";
+          const currentDriver = driverReference.current;
+          if (currentDriver === undefined) {
+            throw new Error("synthetic driver was not installed");
+          }
+          decisionDuringSubmit = currentDriver.decideNavigation(
+            "https://chatgpt.com/",
+            "https://chatgpt.com/c/synthetic-owned",
+          );
+          secondDecisionDuringSubmit = currentDriver.decideNavigation(
+            "https://chatgpt.com/",
+            "https://chatgpt.com/c/second-before-adoption",
+          );
+        },
+      });
+      const driver = createDriver(locationValue);
+      driverReference.current = driver;
+      const catalog = await driver.discoverModelOptions();
+      const selected = readSelected(catalog);
+      const completedOutput = deferred<string>();
+      const terminal = deferred<"cancelled" | "completed" | "failed">();
+      const deltas: string[] = [];
+      const outcomePromise = driver.startAgentTurn(
+        "GSB/2 BEGIN\n{}\nGSB/2 END",
+        selected.semanticKey,
+        {
+          acceptModelOptions: (options) => sameCatalog(options, catalog),
+          onSubmitting: () => undefined,
+          shouldSubmit: () => true,
+        },
+        {
+          cancelled: () => {
+            terminal.resolve("cancelled");
+          },
+          completed: (outputText) => {
+            if (outputText !== undefined) {
+              completedOutput.resolve(outputText);
+            }
+            terminal.resolve("completed");
+          },
+          failed: () => {
+            terminal.resolve("failed");
+          },
+          outputText: (delta) => {
+            deltas.push(delta);
+          },
+          started: () => undefined,
+        },
+      );
+      const submitted = await surface.submitted.promise;
+      await expect(outcomePromise).resolves.toBe("submitted");
+
+      expect(decisionDuringSubmit).toBe("defer");
+      expect(secondDecisionDuringSubmit).toBe("reject");
+      expect(
+        driver.decideNavigation("https://chatgpt.com/", "https://chatgpt.com/c/synthetic-owned"),
+      ).toBe("adopt");
+      expect(
+        driver.decideNavigation(
+          "https://chatgpt.com/c/synthetic-owned",
+          "https://chatgpt.com/c/other",
+        ),
+      ).toBe("reject");
+
+      const hidden = document.createElement("span");
+      hidden.hidden = true;
+      hidden.textContent = "must-not-leak";
+      const action = document.createElement("button");
+      action.textContent = "Copy";
+      const splitAt = Math.floor(exactOutput.length / 2);
+      const streamedText = document.createTextNode(exactOutput.slice(0, splitAt));
+      submitted.assistant.replaceChildren(streamedText, hidden, action);
+      await delay(25);
+      expect(deltas).toEqual([]);
+      streamedText.appendData(exactOutput.slice(splitAt));
+      await delay(25);
+      expect(deltas).toEqual([]);
+      submitted.stop.remove();
+
+      await expect(withTimeout(terminal.promise)).resolves.toBe("completed");
+      const actualOutput = await withTimeout(completedOutput.promise);
+      expect(deltas).toEqual([]);
+      expect(actualOutput).toBe(exactOutput);
+      expect(new TextEncoder().encode(actualOutput)).toEqual(new TextEncoder().encode(exactOutput));
+      expectExactAgentEnvelope(actualOutput, kind);
+    },
+  );
+
+  it("cancels an agent turn only through the visible Stop control without leaking partial output", async () => {
+    const surface = mountSyntheticChatGptSurface();
+    const driver = createDriver();
+    const catalog = await driver.discoverModelOptions();
+    const selected = readSelected(catalog);
+    const terminal = deferred<"cancelled" | "completed" | "failed">();
+    const deltas: string[] = [];
+    const outcomePromise = driver.startAgentTurn(
+      "GSB/2 BEGIN\n{}\nGSB/2 END",
+      selected.semanticKey,
+      {
+        acceptModelOptions: (options) => sameCatalog(options, catalog),
+        onSubmitting: () => undefined,
+        shouldSubmit: () => true,
+      },
+      observerFor(terminal, deltas),
+    );
+    const submitted = await surface.submitted.promise;
+    await expect(outcomePromise).resolves.toBe("submitted");
+
+    submitted.assistant.textContent = agentEnvelopeFixtures[0]?.output.slice(0, 40) ?? "partial";
+    await delay(25);
+    expect(deltas).toEqual([]);
+    expect(submitted.stop.isConnected).toBe(true);
+    await expect(driver.cancelTextTurn()).resolves.toBe(true);
+    expect(submitted.stop.isConnected).toBe(false);
+    await expect(withTimeout(terminal.promise)).resolves.toBe("cancelled");
+    expect(deltas).toEqual([]);
+  });
+
+  it("fails an active agent turn when its adopted conversation route changes", async () => {
+    const locationValue = {
+      origin: "https://chatgpt.com",
+      pathname: "/",
+    } as Location;
+    const surface = mountSyntheticChatGptSurface({
+      onSubmit: () => {
+        locationValue.pathname = "/c/synthetic-owned";
+      },
+    });
+    const driver = createDriver(locationValue);
+    const catalog = await driver.discoverModelOptions();
+    const selected = readSelected(catalog);
+    const terminal = deferred<"cancelled" | "completed" | "failed">();
+    const outcomePromise = driver.startAgentTurn(
+      "GSB/2 BEGIN\n{}\nGSB/2 END",
+      selected.semanticKey,
+      {
+        acceptModelOptions: (options) => sameCatalog(options, catalog),
+        onSubmitting: () => undefined,
+        shouldSubmit: () => true,
+      },
+      observerFor(terminal),
+    );
+    const submitted = await surface.submitted.promise;
+    await expect(outcomePromise).resolves.toBe("submitted");
+    submitted.assistant.textContent = agentEnvelopeFixtures[1]?.output ?? "response";
+
+    locationValue.pathname = "/c/unowned-navigation";
+    submitted.assistant.append(document.createTextNode(" "));
+
+    await expect(withTimeout(terminal.promise)).resolves.toBe("failed");
+  });
+
   it("reports cancellation only after clicking a visible Stop control", async () => {
     const surface = mountSyntheticChatGptSurface();
     const driver = createDriver();
@@ -207,16 +403,23 @@ describe("BrowserChatGptUiDriver in Chrome", () => {
   });
 });
 
-function createDriver(): BrowserChatGptUiDriver {
+function createDriver(
+  locationValue: Location = Object.freeze({
+    origin: "https://chatgpt.com",
+    pathname: "/",
+  }) as Location,
+): BrowserChatGptUiDriver {
   const driver = new BrowserChatGptUiDriver({
     document,
-    location: Object.freeze({ origin: "https://chatgpt.com", pathname: "/" }) as Location,
+    location: locationValue,
   });
   activeDrivers.add(driver);
   return driver;
 }
 
-function mountSyntheticChatGptSurface(): SyntheticChatGptSurface {
+function mountSyntheticChatGptSurface(
+  options: SyntheticChatGptSurfaceOptions = {},
+): SyntheticChatGptSurface {
   const style = document.createElement("style");
   style.dataset["gsbBrowserFixture"] = "true";
   style.textContent =
@@ -242,7 +445,11 @@ function mountSyntheticChatGptSurface(): SyntheticChatGptSurface {
   modelSubmenu.setAttribute("aria-controls", "gsb-model-menu");
   modelSubmenu.setAttribute("aria-haspopup", "menu");
   modelSubmenu.setAttribute("role", "menuitem");
-  modelSubmenu.textContent = "Model";
+  const modelSubmenuLabel = document.createElement("span");
+  modelSubmenuLabel.textContent = "Model";
+  const currentModelLabel = document.createElement("span");
+  currentModelLabel.textContent = "GPT-5.6 Sol";
+  modelSubmenu.append(modelSubmenuLabel, currentModelLabel);
   const unrelatedControl = document.createElement("button");
   unrelatedControl.type = "button";
   unrelatedControl.setAttribute("role", "menuitem");
@@ -276,6 +483,7 @@ function mountSyntheticChatGptSurface(): SyntheticChatGptSurface {
         candidate.setAttribute("aria-checked", candidate === option ? "true" : "false");
       }
       trigger.textContent = option.textContent;
+      currentModelLabel.textContent = option.textContent;
       trigger.setAttribute("aria-expanded", "false");
       menu.hidden = true;
       rootMenu.hidden = true;
@@ -315,6 +523,7 @@ function mountSyntheticChatGptSurface(): SyntheticChatGptSurface {
     });
     transcript.append(user, assistant);
     form.append(stop);
+    options.onSubmit?.();
     submitted.resolve(Object.freeze({ assistant, prompt, stop }));
   });
 
@@ -353,6 +562,18 @@ function sameCatalog(
   expected: readonly ObservedModelOption[],
 ): boolean {
   return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function expectExactAgentEnvelope(value: string, kind: "final" | "tool_call"): void {
+  expect(value).not.toContain("\r");
+  const lines = value.split("\n");
+  expect(lines).toHaveLength(3);
+  expect(lines[0]).toBe("GSB/2 BEGIN");
+  expect(lines[2]).toBe("GSB/2 END");
+  const body = lines[1];
+  expect(body?.startsWith("{")).toBe(true);
+  expect(body?.endsWith("}")).toBe(true);
+  expect(JSON.parse(body ?? "null")).toMatchObject({ kind, v: 2 });
 }
 
 function observerFor(

@@ -214,7 +214,7 @@ function describeConnectionStatus(status: UiStatus): string {
 
   switch (status.state) {
     case "connected":
-      return "Connected for text-only Web turns. Keep this bridge-owned conversation open.";
+      return "Connected to this bridge-owned conversation. Text Web models are available; activate tool access below to expose Web Agent models.";
     case "connecting":
       return "Connecting this ChatGPT tab…";
     case "error":
@@ -228,7 +228,7 @@ function describeToolStatus(activation: UiToolActivationStatus, now: number): st
   if (activation.state === "active") {
     const remainingMs = Math.max(0, activation.expiresAtMs - now);
     const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
-    return `The tool consent lease is active for this tab and expires after about ${String(remainingMinutes)} minute${remainingMinutes === 1 ? "" : "s"} without admitted agent activity. The Web Agent model remains unavailable in this build.`;
+    return `The tool consent lease is active for this tab and expires after about ${String(remainingMinutes)} minute${remainingMinutes === 1 ? "" : "s"} without admitted agent activity. Web Agent models are available while this document and its visible model catalog remain verified.`;
   }
   switch (activation.reason) {
     case "deactivated":

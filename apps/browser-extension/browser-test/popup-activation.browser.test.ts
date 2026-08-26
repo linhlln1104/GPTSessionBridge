@@ -37,6 +37,8 @@ describe("tool activation popup", () => {
       type: "ui/tool-activation/activate",
     });
     expect(toolStatus().textContent).toContain("tool consent lease is active for this tab");
+    expect(toolStatus().textContent).toContain("Web Agent models are available");
+    expect(toolStatus().textContent).not.toContain("unavailable in this build");
     expect(consent().checked).toBe(false);
     expect(consent().disabled).toBe(true);
 

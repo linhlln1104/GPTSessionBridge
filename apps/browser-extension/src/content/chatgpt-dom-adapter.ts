@@ -3,11 +3,13 @@ import type { WebModelDescriptor } from "@gpt-session-bridge/protocol";
 import {
   PAGE_DEFAULT_REASONING_EFFORT,
   type PageFailureCode,
+  type PageAgentTurnStartMessage,
   type PageTurnStartMessage,
 } from "../protocol/page-messages.js";
 
 const MAX_CATALOG_MODELS = 128;
 const MAX_SEMANTIC_KEY_CHARACTERS = 512;
+const MAX_AGENT_PERMITS_PER_DOCUMENT = 64;
 const MODEL_ID_PREFIX = "ui-";
 const REASONING_DESCRIPTION =
   "Compatibility label only; it does not control ChatGPT Web reasoning, which remains UI-defined.";
@@ -22,7 +24,7 @@ export interface ObservedModelOption {
 }
 
 export interface ChatGptUiTurnObserver {
-  completed(): void;
+  completed(outputText?: string): void;
   failed(): void;
   outputText(text: string): void;
   started(): void;
@@ -52,12 +54,25 @@ export interface ChatGptUiDriver {
     preparation: ChatGptUiTurnPreparation,
     observer: ChatGptUiTurnObserver,
   ): Promise<ChatGptUiTurnStartOutcome>;
+  startAgentTurn(
+    prompt: string,
+    semanticKey: string,
+    preparation: ChatGptUiTurnPreparation,
+    observer: ChatGptUiTurnObserver,
+  ): Promise<ChatGptUiTurnStartOutcome>;
 }
 
 export interface ChatGptDomAdapterSink {
   completed(turnId: string): void;
   failed(turnId: string, failure: AdapterFailure): void;
   outputText(turnId: string, delta: string): void;
+  started(turnId: string): void;
+  cancelled(turnId: string): void;
+}
+
+export interface ChatGptDomAgentSink {
+  completed(turnId: string, outputText: string): void;
+  failed(turnId: string, failure: AdapterFailure): void;
   started(turnId: string): void;
   cancelled(turnId: string): void;
 }
@@ -93,7 +108,8 @@ interface NormalizedObservedOption {
 
 interface ActiveAdapterTurn {
   cancelRequested: boolean;
-  readonly sink: ChatGptDomAdapterSink;
+  readonly sink: ChatGptDomAdapterSink | ChatGptDomAgentSink;
+  readonly mode: "agent" | "text";
   stage: "preparing" | "submitted";
   readonly turnId: string;
 }
@@ -113,13 +129,12 @@ export class ChatGptDomAdapterError extends Error {
   }
 }
 
-/**
- * Coordinates a single text-only turn through the narrow semantic UI driver.
- */
+/** Coordinates one text or consent-gated agent turn through the semantic UI driver. */
 export class ChatGptDomAdapter {
   readonly #digest: (value: string) => Promise<string>;
   readonly #driver: ChatGptUiDriver;
   #activeTurn: ActiveAdapterTurn | undefined;
+  readonly #consumedAgentPermits = new Set<string>();
   #catalogListener: ((catalog: AdapterCatalog) => void) | undefined;
   #catalogObservation: Promise<void> = Promise.resolve();
   #disposed = false;
@@ -164,9 +179,41 @@ export class ChatGptDomAdapter {
     };
   }
 
-  public async startTurn(
-    command: PageTurnStartMessage,
-    sink: ChatGptDomAdapterSink,
+  public startTurn(command: PageTurnStartMessage, sink: ChatGptDomAdapterSink): Promise<void> {
+    return this.#startTurn(command, sink, "text");
+  }
+
+  public startAgentTurn(
+    command: PageAgentTurnStartMessage,
+    sink: ChatGptDomAgentSink,
+  ): Promise<void> {
+    this.#assertAvailable();
+    if (command.permit.turnId !== command.turnId) {
+      throw adapterError(
+        "browser_state_changed",
+        "The agent turn permit does not match the requested turn.",
+        false,
+      );
+    }
+    const permitKey = agentPermitKey(command);
+    if (
+      this.#consumedAgentPermits.size >= MAX_AGENT_PERMITS_PER_DOCUMENT ||
+      this.#consumedAgentPermits.has(permitKey)
+    ) {
+      throw adapterError(
+        "browser_state_changed",
+        "The one-shot agent turn permit was already consumed.",
+        false,
+      );
+    }
+    this.#consumedAgentPermits.add(permitKey);
+    return this.#startTurn(command, sink, "agent");
+  }
+
+  async #startTurn(
+    command: PageAgentTurnStartMessage | PageTurnStartMessage,
+    sink: ChatGptDomAdapterSink | ChatGptDomAgentSink,
+    mode: "agent" | "text",
   ): Promise<void> {
     this.#assertAvailable();
     if (this.#activeTurn !== undefined) {
@@ -188,6 +235,7 @@ export class ChatGptDomAdapter {
     // the single-turn guard while model discovery is in flight.
     const active: ActiveAdapterTurn = {
       cancelRequested: false,
+      mode,
       sink,
       stage: "preparing",
       turnId,
@@ -232,61 +280,31 @@ export class ChatGptDomAdapter {
       if (this.#finishPreSubmitCancellation(active)) {
         return;
       }
-      const outcome = await this.#driver.startTextTurn(
-        prompt,
-        entry.semanticKey,
-        {
-          acceptModelOptions: (options) => {
-            try {
-              const normalized = normalizeObservedCatalog(options);
-              return (
-                semanticSnapshot(normalized) === catalog.semanticSnapshot &&
-                normalized.find((option) => option.selected)?.semanticKey === entry.semanticKey
-              );
-            } catch {
-              return false;
-            }
-          },
-          onSubmitting: () => {
-            active.stage = "submitted";
-          },
-          shouldSubmit: () => !active.cancelRequested,
-        },
-        {
-          cancelled: () => {
-            if (this.#finish(active)) {
-              sink.cancelled(turnId);
-            }
-          },
-          completed: () => {
-            if (this.#finish(active)) {
-              sink.completed(turnId);
-            }
-          },
-          failed: () => {
-            if (this.#finish(active)) {
-              sink.failed(
-                turnId,
-                Object.freeze({
-                  code: "browser_state_changed",
-                  message: "ChatGPT Web changed after the turn was submitted.",
-                  retryable: false,
-                }),
-              );
-            }
-          },
-          outputText: (delta) => {
-            if (this.#activeTurn === active && delta.length > 0) {
-              sink.outputText(turnId, delta);
-            }
-          },
-          started: () => {
-            if (this.#activeTurn === active) {
-              sink.started(turnId);
-            }
-          },
-        },
-      );
+      const outcome = await (mode === "agent"
+        ? this.#driver.startAgentTurn(
+            prompt,
+            entry.semanticKey,
+            {
+              acceptModelOptions: (options) => acceptsPreparedModel(options, catalog, entry),
+              onSubmitting: () => {
+                active.stage = "submitted";
+              },
+              shouldSubmit: () => !active.cancelRequested,
+            },
+            this.#createTurnObserver(active, sink),
+          )
+        : this.#driver.startTextTurn(
+            prompt,
+            entry.semanticKey,
+            {
+              acceptModelOptions: (options) => acceptsPreparedModel(options, catalog, entry),
+              onSubmitting: () => {
+                active.stage = "submitted";
+              },
+              shouldSubmit: () => !active.cancelRequested,
+            },
+            this.#createTurnObserver(active, sink),
+          ));
       if (outcome === "cancelled-before-submit" && this.#finish(active)) {
         sink.cancelled(turnId);
       }
@@ -318,6 +336,62 @@ export class ChatGptDomAdapter {
         false,
       );
     }
+  }
+
+  #createTurnObserver(
+    active: ActiveAdapterTurn,
+    sink: ChatGptDomAdapterSink | ChatGptDomAgentSink,
+  ): ChatGptUiTurnObserver {
+    const turnId = active.turnId;
+    return {
+      cancelled: () => {
+        if (this.#finish(active)) {
+          sink.cancelled(turnId);
+        }
+      },
+      completed: (outputText) => {
+        if (this.#finish(active)) {
+          if (active.mode === "agent") {
+            if (outputText === undefined) {
+              sink.failed(
+                turnId,
+                Object.freeze({
+                  code: "browser_state_changed",
+                  message: "ChatGPT Web did not preserve the complete agent response.",
+                  retryable: false,
+                }),
+              );
+            } else {
+              sink.completed(turnId, outputText);
+            }
+          } else {
+            (sink as ChatGptDomAdapterSink).completed(turnId);
+          }
+        }
+      },
+      failed: () => {
+        if (this.#finish(active)) {
+          sink.failed(
+            turnId,
+            Object.freeze({
+              code: "browser_state_changed",
+              message: "ChatGPT Web changed after the turn was submitted.",
+              retryable: false,
+            }),
+          );
+        }
+      },
+      outputText: (delta) => {
+        if (active.mode === "text" && this.#activeTurn === active && delta.length > 0) {
+          (sink as ChatGptDomAdapterSink).outputText(turnId, delta);
+        }
+      },
+      started: () => {
+        if (this.#activeTurn === active) {
+          sink.started(turnId);
+        }
+      },
+    };
   }
 
   public async cancelTurn(turnId: string): Promise<void> {
@@ -525,6 +599,33 @@ function semanticSnapshot(normalized: readonly NormalizedObservedOption[]): stri
       JSON.stringify({ displayName: option.displayName, semanticKey: option.semanticKey }),
     )
     .join("\n");
+}
+
+function acceptsPreparedModel(
+  options: readonly ObservedModelOption[],
+  catalog: InternalCatalog,
+  entry: CatalogEntry,
+): boolean {
+  try {
+    const normalized = normalizeObservedCatalog(options);
+    return (
+      semanticSnapshot(normalized) === catalog.semanticSnapshot &&
+      normalized.find((option) => option.selected)?.semanticKey === entry.semanticKey
+    );
+  } catch {
+    return false;
+  }
+}
+
+function agentPermitKey(command: PageAgentTurnStartMessage): string {
+  return JSON.stringify([
+    command.permit.activation.leaseId,
+    command.permit.activation.revision,
+    command.permit.activation.binding.documentId,
+    command.permit.activation.binding.generation,
+    command.permit.activation.conversationOwnershipId,
+    command.permit.turnId,
+  ]);
 }
 
 function compareText(left: string, right: string): number {

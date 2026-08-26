@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   ChatGptDomAdapter,
   type AdapterCatalog,
+  type ChatGptDomAgentSink,
   type ChatGptDomAdapterSink,
   type ChatGptUiDriver,
   type ChatGptUiTurnPreparation,
@@ -12,7 +13,10 @@ import {
   type ChatGptUiTurnStartOutcome,
   type ObservedModelOption,
 } from "../src/content/chatgpt-dom-adapter.js";
-import type { PageTurnStartMessage } from "../src/protocol/page-messages.js";
+import type {
+  PageAgentTurnStartMessage,
+  PageTurnStartMessage,
+} from "../src/protocol/page-messages.js";
 
 describe("ChatGPT DOM adapter", () => {
   it("derives stable collision-resistant IDs only from the observed semantic catalog", async () => {
@@ -90,6 +94,36 @@ describe("ChatGPT DOM adapter", () => {
     expect(events).toEqual(["started:turn-1", "delta:turn-1:hello", "cancelled:turn-1"]);
     expect(driver.selectedSemanticKey).toBe(driver.options[0]?.semanticKey);
     expect(driver.prompt).toBe("first");
+  });
+
+  it("returns the complete agent envelope byte-for-byte only at terminal and rejects replay", async () => {
+    const driver = new FakeUiDriver([modelOption("Web Alpha")]);
+    const adapter = new ChatGptDomAdapter({ digest, driver });
+    const catalog = await adapter.discoverCatalog();
+    const output = ' \tGSB/2 BEGIN\r\n{"value":"a\u00a0b  "}\r\nGSB/2 END \n';
+    const completed: string[] = [];
+    const events: string[] = [];
+    const command = agentTurnCommand(catalog, "turn-agent");
+    driver.agentOutput = output;
+
+    await adapter.startAgentTurn(command, createAgentSink(events, completed));
+
+    expect(events).toEqual(["started:turn-agent", "completed:turn-agent"]);
+    expect(completed).toEqual([output]);
+    expect(new TextEncoder().encode(completed[0])).toEqual(new TextEncoder().encode(output));
+    let replayError: unknown;
+    try {
+      void adapter.startAgentTurn(command, createAgentSink([], []));
+    } catch (error) {
+      replayError = error;
+    }
+    expect(replayError).toMatchObject({
+      failure: {
+        code: "browser_state_changed",
+        message: "The one-shot agent turn permit was already consumed.",
+        retryable: false,
+      },
+    });
   });
 
   it("cancels a submitted turn before its first output delta", async () => {
@@ -361,6 +395,7 @@ describe("ChatGPT DOM adapter", () => {
 });
 
 class FakeUiDriver implements ChatGptUiDriver {
+  public agentOutput = "hello";
   public cancelBehavior: "accept-without-terminal" | "terminal" = "terminal";
   public discoveryGate: Promise<void> = Promise.resolve();
   public options: readonly ObservedModelOption[];
@@ -432,11 +467,30 @@ class FakeUiDriver implements ChatGptUiDriver {
     return selected;
   }
 
-  public async startTextTurn(
+  public startTextTurn(
     prompt: string,
     semanticKey: string,
     preparation: ChatGptUiTurnPreparation,
     observer: ChatGptUiTurnObserver,
+  ): Promise<ChatGptUiTurnStartOutcome> {
+    return this.#startTurn(prompt, semanticKey, preparation, observer, false);
+  }
+
+  public startAgentTurn(
+    prompt: string,
+    semanticKey: string,
+    preparation: ChatGptUiTurnPreparation,
+    observer: ChatGptUiTurnObserver,
+  ): Promise<ChatGptUiTurnStartOutcome> {
+    return this.#startTurn(prompt, semanticKey, preparation, observer, true);
+  }
+
+  async #startTurn(
+    prompt: string,
+    semanticKey: string,
+    preparation: ChatGptUiTurnPreparation,
+    observer: ChatGptUiTurnObserver,
+    agent: boolean,
   ): Promise<ChatGptUiTurnStartOutcome> {
     this.preparationStarted = true;
     await this.preparationGate;
@@ -471,7 +525,7 @@ class FakeUiDriver implements ChatGptUiDriver {
     }
     if (this.startBehavior === "complete") {
       this.#activeObserver = undefined;
-      observer.completed();
+      observer.completed(agent ? this.agentOutput : undefined);
     }
     return "submitted";
   }
@@ -509,12 +563,54 @@ function turnCommand(catalog: AdapterCatalog, turnId: string): PageTurnStartMess
   };
 }
 
+function agentTurnCommand(catalog: AdapterCatalog, turnId: string): PageAgentTurnStartMessage {
+  const model = catalog.models[0];
+  if (model === undefined) {
+    throw new Error("missing fixture model");
+  }
+  const activation = {
+    binding: { documentId: "document-1", generation: 1, tabId: 7 },
+    conversationOwnershipId: "ownership-1",
+    expiresAtMs: 901_000,
+    issuedAtMs: 1_000,
+    lastActivityAtMs: 1_000,
+    leaseId: "lease-1",
+    revision: 1,
+    state: "active",
+  } as const;
+  return {
+    catalogRevision: catalog.catalogRevision,
+    input: [{ text: "GSB/2 BEGIN\n{}\nGSB/2 END", type: "text" }],
+    modelId: model.id,
+    permit: { activation, turnId },
+    protocolVersion: 1,
+    reasoningEffort: "medium",
+    requestId: `request-${turnId}`,
+    sequence: 1,
+    temporary: false,
+    turnId,
+    type: "page/agent/turn/start",
+  };
+}
+
 function createSink(events: string[]): ChatGptDomAdapterSink {
   return {
     cancelled: (turnId) => events.push(`cancelled:${turnId}`),
     completed: (turnId) => events.push(`completed:${turnId}`),
     failed: (turnId, failure) => events.push(`failed:${turnId}:${failure.code}`),
     outputText: (turnId, delta) => events.push(`delta:${turnId}:${delta}`),
+    started: (turnId) => events.push(`started:${turnId}`),
+  };
+}
+
+function createAgentSink(events: string[], completed: string[]): ChatGptDomAgentSink {
+  return {
+    cancelled: (turnId) => events.push(`cancelled:${turnId}`),
+    completed: (turnId, outputText) => {
+      events.push(`completed:${turnId}`);
+      completed.push(outputText);
+    },
+    failed: (turnId, failure) => events.push(`failed:${turnId}:${failure.code}`),
     started: (turnId) => events.push(`started:${turnId}`),
   };
 }

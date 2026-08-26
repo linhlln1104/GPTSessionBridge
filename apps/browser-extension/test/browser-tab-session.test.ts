@@ -1,6 +1,8 @@
 import {
+  AGENT_WORKFLOW_PROTOCOL_VERSION,
   NATIVE_MESSAGING_PROTOCOL_VERSION,
   nativeMessagingFrameSchema,
+  type ActiveAgentStatusSnapshot,
   type NativeMessagingFrame,
 } from "@gpt-session-bridge/protocol";
 import { describe, expect, it } from "vitest";
@@ -160,6 +162,134 @@ describe("BrowserTabSession", () => {
       type: "turn/completed",
       payload: { finishReason: "stop", sessionId: "session-1", turnId: "turn-1" },
     });
+  });
+
+  it("admits one exact agent permit and preserves its terminal envelope without replay", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(2, "capabilities/read", { sessionId: "session-1" }),
+    );
+    harness.pagePort.emitMessage(pageCatalogResult(1, "incoming-2"));
+    const active = activeAgentStatus();
+    session.updateAgentStatus(active);
+    harness.nativePort.emitMessage(
+      applicationFrame(3, "agent/turn/start", agentTurnPayload("turn-agent", active)),
+    );
+
+    expect(harness.pagePort.sent[2]).toEqual({
+      catalogRevision: catalogRevision(),
+      input: [{ text: "GSB/2 BEGIN\n{}\nGSB/2 END", type: "text" }],
+      modelId: webModel().id,
+      permit: { activation: active, turnId: "turn-agent" },
+      protocolVersion: 1,
+      reasoningEffort: "medium",
+      requestId: "incoming-3",
+      sequence: 2,
+      temporary: false,
+      turnId: "turn-agent",
+      type: "page/agent/turn/start",
+    });
+    harness.pagePort.emitMessage({
+      protocolVersion: 1,
+      requestId: "incoming-3",
+      sequence: 2,
+      turnId: "turn-agent",
+      type: "page/turn/started",
+    });
+    const exactOutput = ' \tGSB/2 BEGIN\r\n{"value":"a\u00a0b  "}\r\nGSB/2 END \n';
+    harness.pagePort.emitMessage({
+      delta: exactOutput,
+      protocolVersion: 1,
+      sequence: 3,
+      turnId: "turn-agent",
+      type: "page/turn/delta",
+    });
+    harness.pagePort.emitMessage({
+      protocolVersion: 1,
+      sequence: 4,
+      turnId: "turn-agent",
+      type: "page/turn/completed",
+    });
+
+    expect(harness.nativeFrame(4)).toMatchObject({
+      type: "turn/started",
+      payload: { sessionId: "session-1", turnId: "turn-agent" },
+    });
+    const delta = harness.nativeFrame(5);
+    expect(delta).toMatchObject({
+      type: "turn/delta",
+      payload: { channel: "outputText", sessionId: "session-1", turnId: "turn-agent" },
+    });
+    if (delta.type !== "turn/delta") {
+      throw new Error("missing synthetic agent delta");
+    }
+    expect(new TextEncoder().encode(delta.payload.delta)).toEqual(
+      new TextEncoder().encode(exactOutput),
+    );
+    expect(harness.nativeFrame(6)).toMatchObject({
+      type: "turn/completed",
+      payload: { finishReason: "stop", sessionId: "session-1", turnId: "turn-agent" },
+    });
+
+    harness.nativePort.emitMessage(
+      applicationFrame(4, "agent/turn/start", agentTurnPayload("turn-agent", active)),
+    );
+    expect(harness.nativeFrame(7)).toMatchObject({
+      type: "turn/failed",
+      payload: {
+        error: { code: "browser.state_changed", retryable: false },
+        turnId: "turn-agent",
+      },
+    });
+    expect(harness.pagePort.sent).toHaveLength(3);
+  });
+
+  it("rejects stale and cross-document agent snapshots before touching the page", async () => {
+    const harness = new ChromeHarness();
+    const session = harness.createSession();
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(2, "capabilities/read", { sessionId: "session-1" }),
+    );
+    harness.pagePort.emitMessage(pageCatalogResult(1, "incoming-2"));
+    const active = activeAgentStatus();
+    session.updateAgentStatus(active);
+
+    harness.nativePort.emitMessage(
+      applicationFrame(
+        3,
+        "agent/turn/start",
+        agentTurnPayload("turn-stale", { ...active, revision: active.revision + 1 }),
+      ),
+    );
+    harness.nativePort.emitMessage(
+      applicationFrame(
+        4,
+        "agent/turn/start",
+        agentTurnPayload("turn-cross-document", {
+          ...active,
+          binding: { ...active.binding, documentId: "document-other" },
+        }),
+      ),
+    );
+
+    expect(harness.nativeFrame(4)).toMatchObject({
+      type: "turn/failed",
+      payload: { error: { code: "browser.state_changed" }, turnId: "turn-stale" },
+    });
+    expect(harness.nativeFrame(5)).toMatchObject({
+      type: "turn/failed",
+      payload: { error: { code: "browser.state_changed" }, turnId: "turn-cross-document" },
+    });
+    expect(harness.pagePort.sent).toHaveLength(2);
   });
 
   it("relays catalog changes observed from the visible picker", async () => {
@@ -460,6 +590,73 @@ describe("BrowserTabSession", () => {
     expect(harness.nativeApplication).toBeUndefined();
   });
 
+  it("reports activation, renews exact activity, and rejects a stale lease", async () => {
+    const harness = new ChromeHarness();
+    const admitted: ActiveAgentStatusSnapshot[] = [];
+    const session = harness.createSession((expected) => {
+      admitted.push(expected);
+      return {
+        ...expected,
+        expiresAtMs: 1_201_000,
+        lastActivityAtMs: 301_000,
+        revision: expected.revision + 1,
+      };
+    });
+    await harness.connectAndHandshake(session);
+    harness.nativePort.emitMessage(
+      applicationFrame(1, "session/connect", { sessionId: "session-1" }),
+    );
+    const active = activeAgentStatus();
+    session.updateAgentStatus(active);
+    expect(harness.nativeFrame(2)).toMatchObject({
+      type: "agent/status/changed",
+      payload: {
+        agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+        sessionId: "session-1",
+        status: active,
+      },
+    });
+
+    harness.nativePort.emitMessage(
+      applicationFrame(2, "agent/status/read", { sessionId: "session-1" }),
+    );
+    expect(harness.nativeFrame(3)).toMatchObject({
+      requestId: "incoming-2",
+      type: "agent/status/result",
+      payload: { status: active },
+    });
+
+    harness.nativePort.emitMessage(
+      applicationFrame(3, "agent/activity/note", {
+        expected: active,
+        sessionId: "session-1",
+      }),
+    );
+    expect(admitted).toEqual([active]);
+    expect(harness.nativeFrame(4)).toMatchObject({
+      type: "agent/status/changed",
+      payload: { status: { revision: 2, lastActivityAtMs: 301_000 } },
+    });
+    expect(harness.nativeFrame(5)).toMatchObject({
+      requestId: "incoming-3",
+      type: "agent/activity/result",
+      payload: { status: { revision: 2, lastActivityAtMs: 301_000 } },
+    });
+
+    harness.nativePort.emitMessage(
+      applicationFrame(4, "agent/activity/note", {
+        expected: active,
+        sessionId: "session-1",
+      }),
+    );
+    expect(admitted).toHaveLength(1);
+    expect(harness.nativeFrame(6)).toMatchObject({
+      requestId: "incoming-4",
+      type: "error",
+      payload: { error: { code: "browser.state_changed", retryable: false } },
+    });
+  });
+
   it("closes both ports on an invalid page message", async () => {
     const harness = new ChromeHarness();
     const session = harness.createSession();
@@ -717,7 +914,11 @@ class ChromeHarness {
     this.nativePort.emitMessage(helloAcknowledgedFrame());
   }
 
-  public createSession(): BrowserTabSession {
+  public createSession(
+    noteAgentActivity?: (
+      expected: ActiveAgentStatusSnapshot,
+    ) => ActiveAgentStatusSnapshot | undefined,
+  ): BrowserTabSession {
     return new BrowserTabSession({
       chrome: this.chrome,
       createRequestId: () => {
@@ -728,6 +929,7 @@ class ChromeHarness {
         }
         return requestId;
       },
+      ...(noteAgentActivity === undefined ? {} : { noteAgentActivity }),
       onDocumentInvalidated: (reason) => {
         this.documentInvalidations.push(reason);
       },
@@ -775,7 +977,14 @@ function helloAcknowledgedFrame(): NativeMessagingFrame {
 function applicationFrame(
   sequence: number,
   type:
-    "capabilities/read" | "session/connect" | "session/disconnect" | "turn/cancel" | "turn/start",
+    | "agent/activity/note"
+    | "agent/status/read"
+    | "agent/turn/start"
+    | "capabilities/read"
+    | "session/connect"
+    | "session/disconnect"
+    | "turn/cancel"
+    | "turn/start",
   payload: unknown,
 ): NativeMessagingFrame {
   return nativeMessagingFrameSchema.parse({
@@ -787,10 +996,40 @@ function applicationFrame(
   });
 }
 
+function activeAgentStatus(): ActiveAgentStatusSnapshot {
+  return {
+    binding: { documentId: "document-1", generation: 1, tabId: 7 },
+    conversationOwnershipId: "ownership-1",
+    expiresAtMs: 901_000,
+    issuedAtMs: 1_000,
+    lastActivityAtMs: 1_000,
+    leaseId: "lease-1",
+    revision: 1,
+    state: "active",
+  };
+}
+
 function turnPayload(turnId: string): Readonly<Record<string, unknown>> {
   return {
     catalogRevision: catalogRevision(),
     input: [{ text: "hello", type: "text" }],
+    modelId: webModel().id,
+    reasoningEffort: "medium",
+    sessionId: "session-1",
+    temporary: false,
+    turnId,
+  };
+}
+
+function agentTurnPayload(
+  turnId: string,
+  expected: ActiveAgentStatusSnapshot,
+): Readonly<Record<string, unknown>> {
+  return {
+    agentProtocolVersion: AGENT_WORKFLOW_PROTOCOL_VERSION,
+    catalogRevision: catalogRevision(),
+    expected,
+    input: [{ text: "GSB/2 BEGIN\n{}\nGSB/2 END", type: "text" }],
     modelId: webModel().id,
     reasoningEffort: "medium",
     sessionId: "session-1",

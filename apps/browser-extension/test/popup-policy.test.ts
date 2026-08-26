@@ -16,7 +16,9 @@ describe("tool activation disclosure", () => {
     expect(source).toContain("may be retained");
     expect(source).toContain("Developer-role priority is not preserved");
     expect(source).toContain('id="tool-consent"');
-    expect(source).toContain("The Web Agent model remains unavailable in this build");
+    expect(source).toContain("exposes Web Agent models only while this tab is connected");
+    expect(source).toContain("visible ChatGPT model picker");
+    expect(source).not.toContain("Web Agent model remains unavailable in this build");
     expect(source).toContain('aria-describedby="tool-disclosure tool-availability tool-status"');
     expect(source).toContain('id="activate-tools" type="button" disabled');
   });

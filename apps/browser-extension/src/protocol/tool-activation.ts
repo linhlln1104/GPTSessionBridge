@@ -1,3 +1,5 @@
+import type { ActiveAgentStatusSnapshot, AgentStatusSnapshot } from "@gpt-session-bridge/protocol";
+
 export const TOOL_ACTIVATION_DISCLOSURE_VERSION = "visible-chat-data-v1" as const;
 export const TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS = 15 * 60 * 1_000;
 
@@ -24,6 +26,7 @@ interface ToolActivationSnapshotBase {
 
 export interface ActiveToolActivationSnapshot extends ToolActivationSnapshotBase {
   readonly binding: ToolActivationDocumentBinding;
+  readonly conversationOwnershipId: string;
   readonly expiresAtMs: number;
   readonly issuedAtMs: number;
   readonly lastActivityAtMs: number;
@@ -34,6 +37,7 @@ export interface ActiveToolActivationSnapshot extends ToolActivationSnapshotBase
 
 export interface InactiveToolActivationSnapshot extends ToolActivationSnapshotBase {
   readonly binding: null;
+  readonly conversationOwnershipId: null;
   readonly expiresAtMs: null;
   readonly issuedAtMs: null;
   readonly lastActivityAtMs: null;
@@ -57,10 +61,11 @@ const INACTIVE_REASONS = new Set<ToolActivationReason>([
   "expired",
   "extension_restart",
 ]);
-const DOCUMENT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
+const DOCUMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const LEASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const SNAPSHOT_KEYS = Object.freeze([
   "binding",
+  "conversationOwnershipId",
   "disclosureVersion",
   "expiresAtMs",
   "inactivityTimeoutMs",
@@ -92,6 +97,7 @@ export function parseToolActivationSnapshot(value: unknown): ToolActivationSnaps
     if (
       !INACTIVE_REASONS.has(reason) ||
       value["binding"] !== null ||
+      value["conversationOwnershipId"] !== null ||
       value["expiresAtMs"] !== null ||
       value["issuedAtMs"] !== null ||
       value["lastActivityAtMs"] !== null ||
@@ -101,6 +107,7 @@ export function parseToolActivationSnapshot(value: unknown): ToolActivationSnaps
     }
     return Object.freeze({
       binding: null,
+      conversationOwnershipId: null,
       disclosureVersion: TOOL_ACTIVATION_DISCLOSURE_VERSION,
       expiresAtMs: null,
       inactivityTimeoutMs: TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
@@ -114,6 +121,7 @@ export function parseToolActivationSnapshot(value: unknown): ToolActivationSnaps
   }
 
   const binding = parseBinding(value["binding"]);
+  const conversationOwnershipId = value["conversationOwnershipId"];
   const issuedAtMs = value["issuedAtMs"];
   const lastActivityAtMs = value["lastActivityAtMs"];
   const expiresAtMs = value["expiresAtMs"];
@@ -121,6 +129,8 @@ export function parseToolActivationSnapshot(value: unknown): ToolActivationSnaps
   if (
     reason !== ACTIVE_REASON ||
     binding === undefined ||
+    typeof conversationOwnershipId !== "string" ||
+    !LEASE_ID_PATTERN.test(conversationOwnershipId) ||
     !isNonnegativeSafeInteger(issuedAtMs) ||
     !isNonnegativeSafeInteger(lastActivityAtMs) ||
     !isNonnegativeSafeInteger(expiresAtMs) ||
@@ -134,6 +144,7 @@ export function parseToolActivationSnapshot(value: unknown): ToolActivationSnaps
   }
   return Object.freeze({
     binding,
+    conversationOwnershipId,
     disclosureVersion: TOOL_ACTIVATION_DISCLOSURE_VERSION,
     expiresAtMs,
     inactivityTimeoutMs: TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
@@ -159,6 +170,45 @@ export function parseToolActivationChangedEvent(
   return snapshot === undefined
     ? undefined
     : Object.freeze({ snapshot, type: "tool-activation/changed" });
+}
+
+/**
+ * Projects the extension-only consent record onto the minimal authenticated
+ * status contract exposed across Native Messaging. Disclosure copy and local
+ * invalidation reasons never cross that boundary.
+ */
+export function toAgentStatusSnapshot(snapshot: ToolActivationSnapshot): AgentStatusSnapshot {
+  if (snapshot.state === "inactive") {
+    return Object.freeze({ revision: snapshot.revision, state: "inactive" });
+  }
+  return Object.freeze({
+    binding: Object.freeze({ ...snapshot.binding }),
+    conversationOwnershipId: snapshot.conversationOwnershipId,
+    expiresAtMs: snapshot.expiresAtMs,
+    issuedAtMs: snapshot.issuedAtMs,
+    lastActivityAtMs: snapshot.lastActivityAtMs,
+    leaseId: snapshot.leaseId,
+    revision: snapshot.revision,
+    state: "active",
+  });
+}
+
+/** Exact optimistic-concurrency check for a renewal request. */
+export function matchesActiveAgentStatusSnapshot(
+  snapshot: ActiveToolActivationSnapshot,
+  expected: ActiveAgentStatusSnapshot,
+): boolean {
+  return (
+    snapshot.binding.documentId === expected.binding.documentId &&
+    snapshot.binding.generation === expected.binding.generation &&
+    snapshot.binding.tabId === expected.binding.tabId &&
+    snapshot.conversationOwnershipId === expected.conversationOwnershipId &&
+    snapshot.expiresAtMs === expected.expiresAtMs &&
+    snapshot.issuedAtMs === expected.issuedAtMs &&
+    snapshot.lastActivityAtMs === expected.lastActivityAtMs &&
+    snapshot.leaseId === expected.leaseId &&
+    snapshot.revision === expected.revision
+  );
 }
 
 function parseBinding(value: unknown): ToolActivationDocumentBinding | undefined {

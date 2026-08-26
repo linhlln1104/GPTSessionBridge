@@ -2,6 +2,7 @@ import {
   TOOL_ACTIVATION_DISCLOSURE_VERSION,
   TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
   parseToolActivationSnapshot,
+  type ActiveToolActivationSnapshot,
   type ToolActivationChangedEvent,
   type ToolActivationDocumentBinding,
   type ToolActivationReason,
@@ -10,18 +11,15 @@ import {
 
 export type ToolActivationListener = (event: ToolActivationChangedEvent) => void;
 
-export interface AdmittedToolWorkflowActivity {
-  readonly binding: ToolActivationDocumentBinding;
-  readonly leaseId: string;
-}
-
 export interface ToolActivationLeaseOptions {
+  readonly createConversationOwnershipId: () => string;
   readonly createLeaseId: () => string;
   readonly now: () => number;
   readonly scheduleTimer: (callback: () => void, delayMs: number) => () => void;
 }
 
 export class ToolActivationLease {
+  readonly #createConversationOwnershipId: () => string;
   readonly #createLeaseId: () => string;
   readonly #listeners = new Set<ToolActivationListener>();
   readonly #now: () => number;
@@ -31,6 +29,7 @@ export class ToolActivationLease {
   #snapshot: ToolActivationSnapshot;
 
   public constructor(options: ToolActivationLeaseOptions) {
+    this.#createConversationOwnershipId = options.createConversationOwnershipId;
     this.#createLeaseId = options.createLeaseId;
     this.#now = options.now;
     this.#scheduleTimer = options.scheduleTimer;
@@ -57,6 +56,7 @@ export class ToolActivationLease {
     const now = this.#readNow();
     const next = parseToolActivationSnapshot({
       binding,
+      conversationOwnershipId: this.#createConversationOwnershipId(),
       disclosureVersion: TOOL_ACTIVATION_DISCLOSURE_VERSION,
       expiresAtMs: now + TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
       inactivityTimeoutMs: TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
@@ -97,16 +97,10 @@ export class ToolActivationLease {
    * lease and document binding. UI, status, and passive transport requests must
    * never call this method.
    */
-  public noteAgentActivity(activity: AdmittedToolWorkflowActivity): boolean {
+  public noteAgentActivity(expected: ActiveToolActivationSnapshot): boolean {
     this.#expireIfDue();
     const current = this.#snapshot;
-    if (
-      current.state !== "active" ||
-      current.leaseId !== activity.leaseId ||
-      current.binding.documentId !== activity.binding.documentId ||
-      current.binding.generation !== activity.binding.generation ||
-      current.binding.tabId !== activity.binding.tabId
-    ) {
+    if (current.state !== "active" || !sameActiveSnapshot(current, expected)) {
       return false;
     }
 
@@ -187,6 +181,7 @@ function createInactiveSnapshot(
 ): ToolActivationSnapshot {
   const snapshot = parseToolActivationSnapshot({
     binding: null,
+    conversationOwnershipId: null,
     disclosureVersion: TOOL_ACTIVATION_DISCLOSURE_VERSION,
     expiresAtMs: null,
     inactivityTimeoutMs: TOOL_ACTIVATION_INACTIVITY_TIMEOUT_MS,
@@ -201,4 +196,22 @@ function createInactiveSnapshot(
     throw new Error("The tool activation state is invalid.");
   }
   return snapshot;
+}
+
+function sameActiveSnapshot(
+  left: ActiveToolActivationSnapshot,
+  right: ActiveToolActivationSnapshot,
+): boolean {
+  return (
+    left.binding.documentId === right.binding.documentId &&
+    left.binding.generation === right.binding.generation &&
+    left.binding.tabId === right.binding.tabId &&
+    left.conversationOwnershipId === right.conversationOwnershipId &&
+    left.expiresAtMs === right.expiresAtMs &&
+    left.inactivityTimeoutMs === right.inactivityTimeoutMs &&
+    left.issuedAtMs === right.issuedAtMs &&
+    left.lastActivityAtMs === right.lastActivityAtMs &&
+    left.leaseId === right.leaseId &&
+    left.revision === right.revision
+  );
 }

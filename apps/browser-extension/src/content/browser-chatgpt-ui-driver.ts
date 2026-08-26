@@ -26,10 +26,12 @@ const DOM_OPERATION_TIMEOUT_MS = 4_000;
 const PICKER_TRIGGER_TIMEOUT_MS = 1_500;
 const MAX_PICKER_TRIGGER_CANDIDATES = 16;
 const MAX_OUTPUT_CHARACTERS = 1_048_576;
+const MAX_AGENT_OUTPUT_BYTES = 256 * 1024;
 const MAX_PROMPT_CHARACTERS = 262_144;
 const MAX_STREAM_DELTA_CHARACTERS = 16_384;
 const STABLE_COMPLETION_MS = 800;
 const TURN_LIFETIME_MS = 15 * 60 * 1_000;
+const textEncoder = new TextEncoder();
 
 interface PickerOption extends ObservedModelOption {
   readonly element: HTMLElement;
@@ -73,6 +75,8 @@ export class BrowserChatGptUiDriver implements ChatGptUiDriver {
   #activeMonitor: BrowserTurnMonitor | undefined;
   readonly #catalogObservers = new Set<MutationObserver>();
   #disposed = false;
+  #initialOwnershipAdoptionPending = false;
+  #pendingOwnershipPath: string | undefined;
   #submissionUncertain = false;
   #verifiedModelPicker: VerifiedModelPicker | undefined;
 
@@ -133,11 +137,64 @@ export class BrowserChatGptUiDriver implements ChatGptUiDriver {
     }
   }
 
-  public async startTextTurn(
+  public startTextTurn(
     prompt: string,
     semanticKey: string,
     preparation: ChatGptUiTurnPreparation,
     observer: ChatGptUiTurnObserver,
+  ): Promise<ChatGptUiTurnStartOutcome> {
+    return this.#startVisibleTurn(prompt, semanticKey, preparation, observer, "text");
+  }
+
+  public startAgentTurn(
+    prompt: string,
+    semanticKey: string,
+    preparation: ChatGptUiTurnPreparation,
+    observer: ChatGptUiTurnObserver,
+  ): Promise<ChatGptUiTurnStartOutcome> {
+    return this.#startVisibleTurn(prompt, semanticKey, preparation, observer, "agent");
+  }
+
+  public decideNavigation(previousUrl: string, nextUrl: string): "adopt" | "defer" | "reject" {
+    let previous: URL;
+    let next: URL;
+    try {
+      previous = new URL(previousUrl);
+      next = new URL(nextUrl);
+    } catch {
+      return "reject";
+    }
+    if (
+      previous.origin !== CHATGPT_ORIGIN ||
+      next.origin !== CHATGPT_ORIGIN ||
+      previous.pathname !== "/" ||
+      previous.search !== "" ||
+      previous.hash !== "" ||
+      !/^\/c\/[A-Za-z0-9_-]{1,128}$/u.test(next.pathname) ||
+      next.search !== "" ||
+      next.hash !== ""
+    ) {
+      return "reject";
+    }
+    if (this.#ownership.ownsPath(next.pathname)) {
+      return "adopt";
+    }
+    if (!this.#initialOwnershipAdoptionPending) {
+      return "reject";
+    }
+    if (this.#pendingOwnershipPath === undefined) {
+      this.#pendingOwnershipPath = next.pathname;
+      return "defer";
+    }
+    return this.#pendingOwnershipPath === next.pathname ? "defer" : "reject";
+  }
+
+  async #startVisibleTurn(
+    prompt: string,
+    semanticKey: string,
+    preparation: ChatGptUiTurnPreparation,
+    observer: ChatGptUiTurnObserver,
+    mode: "agent" | "text",
   ): Promise<ChatGptUiTurnStartOutcome> {
     this.#assertAvailable();
     this.#assertConversationSurface();
@@ -207,15 +264,16 @@ export class BrowserChatGptUiDriver implements ChatGptUiDriver {
         composer,
         document: this.#document,
         location: this.#location,
+        mode,
         observer: {
           ...observer,
           cancelled: () => {
             this.#clearMonitorIfSame(monitor);
             observer.cancelled();
           },
-          completed: () => {
+          completed: (outputText) => {
             this.#clearMonitorIfSame(monitor);
-            observer.completed();
+            observer.completed(outputText);
           },
           failed: () => {
             this.#clearMonitorIfSame(monitor);
@@ -229,11 +287,15 @@ export class BrowserChatGptUiDriver implements ChatGptUiDriver {
       // prove that the prompt was not accepted. Keep the document terminally
       // locked unless ownership and visible start are both confirmed.
       markSubmissionUncertain();
+      this.#initialOwnershipAdoptionPending = !this.#ownership.hasOwnership;
+      this.#pendingOwnershipPath = undefined;
       send.click();
       if (!(await monitor.waitUntilStarted())) {
         throw new Error("turn_start_unconfirmed");
       }
       const userAnchor = await this.#adoptOrVerifyOwnedConversation(baselineUsers, prompt);
+      this.#initialOwnershipAdoptionPending = false;
+      this.#pendingOwnershipPath = undefined;
       monitor.bindConversationValidator(() => {
         this.#assertConversationSurface();
       }, userAnchor);
@@ -241,6 +303,8 @@ export class BrowserChatGptUiDriver implements ChatGptUiDriver {
       this.#submissionUncertain = false;
       return "submitted";
     } catch (error) {
+      this.#initialOwnershipAdoptionPending = false;
+      this.#pendingOwnershipPath = undefined;
       monitor?.fail(false);
       this.#clearMonitorIfSame(monitor);
       if (
@@ -360,6 +424,8 @@ export class BrowserChatGptUiDriver implements ChatGptUiDriver {
     }
     this.#activeMonitor?.fail(false);
     this.#activeMonitor = undefined;
+    this.#initialOwnershipAdoptionPending = false;
+    this.#pendingOwnershipPath = undefined;
     this.#verifiedModelPicker = undefined;
   }
 
@@ -443,11 +509,15 @@ export class BrowserChatGptUiDriver implements ChatGptUiDriver {
     if (candidate === undefined) {
       throw new Error("conversation_ownership_unconfirmed");
     }
-    return this.#ownership.adoptTurn(
-      baselineUsers,
-      readConversationSurface(this.#document, this.#location),
-      prompt,
-      (message) => serializeVisibleText(message, MAX_PROMPT_CHARACTERS),
+    const surface = readConversationSurface(this.#document, this.#location);
+    if (
+      this.#pendingOwnershipPath !== undefined &&
+      surface.pathname !== this.#pendingOwnershipPath
+    ) {
+      throw new Error("conversation_path_changed");
+    }
+    return this.#ownership.adoptTurn(baselineUsers, surface, prompt, (message) =>
+      serializeVisibleText(message, MAX_PROMPT_CHARACTERS),
     );
   }
 }
@@ -457,6 +527,7 @@ interface BrowserTurnMonitorOptions {
   readonly composer: Composer;
   readonly document: Document;
   readonly location: Location;
+  readonly mode: "agent" | "text";
   readonly observer: ChatGptUiTurnObserver;
 }
 
@@ -465,6 +536,7 @@ class BrowserTurnMonitor {
   readonly #composer: Composer;
   readonly #document: Document;
   readonly #location: Location;
+  readonly #mode: "agent" | "text";
   readonly #observer: ChatGptUiTurnObserver;
   readonly #startedPromise: Promise<boolean>;
   #cancelRequested = false;
@@ -488,6 +560,7 @@ class BrowserTurnMonitor {
     this.#composer = options.composer;
     this.#document = options.document;
     this.#location = options.location;
+    this.#mode = options.mode;
     this.#observer = options.observer;
     this.#startedPromise = new Promise<boolean>((resolve) => {
       this.#resolveStarted = resolve;
@@ -554,7 +627,7 @@ class BrowserTurnMonitor {
     }
     this.#started = true;
     this.#observer.started();
-    if (this.#lastText.length > 0) {
+    if (this.#mode === "text" && this.#lastText.length > 0) {
       emitBoundedDelta(this.#lastText, this.#observer);
     }
     this.#tick();
@@ -612,14 +685,22 @@ class BrowserTurnMonitor {
           this.#assertAssistantFollowsUser(this.#userAnchor, candidate);
         }
         this.#response = candidate;
-        const text = extractAssistantText(candidate);
-        if (text.length > MAX_OUTPUT_CHARACTERS || !text.startsWith(this.#lastText)) {
+        const text =
+          this.#mode === "agent"
+            ? extractAssistantTextVerbatim(candidate)
+            : extractAssistantText(candidate);
+        if (
+          text.length > MAX_OUTPUT_CHARACTERS ||
+          (this.#mode === "agent" &&
+            textEncoder.encode(text).byteLength > MAX_AGENT_OUTPUT_BYTES) ||
+          !text.startsWith(this.#lastText)
+        ) {
           this.fail();
           return;
         }
         const delta = text.slice(this.#lastText.length);
         this.#lastText = text;
-        if (this.#started && delta.length > 0) {
+        if (this.#mode === "text" && this.#started && delta.length > 0) {
           emitBoundedDelta(delta, this.#observer);
         }
       }
@@ -687,7 +768,7 @@ class BrowserTurnMonitor {
       if (expectedTerminal === "cancelled") {
         this.#observer.cancelled();
       } else {
-        this.#observer.completed();
+        this.#observer.completed(expectedText);
       }
     }, STABLE_COMPLETION_MS);
   }
@@ -1084,6 +1165,53 @@ function extractAssistantText(message: HTMLElement): string {
     .replace(/\u00a0/gu, " ")
     .replace(/\n{3,}/gu, "\n\n");
   return value.replace(/[\t ]+\n/gu, "\n").trimEnd();
+}
+
+function extractAssistantTextVerbatim(message: HTMLElement): string {
+  const render = (current: Node): string => {
+    if (current.nodeType === Node.TEXT_NODE) {
+      return current.textContent ?? "";
+    }
+    if (!(current instanceof HTMLElement)) {
+      return "";
+    }
+    if (
+      current.matches(
+        'button, input, nav, script, select, style, svg, textarea, [aria-hidden="true"], [hidden]',
+      ) ||
+      !isVisible(current)
+    ) {
+      return "";
+    }
+    if (current.tagName === "BR") {
+      return "\n";
+    }
+    let output = "";
+    let previousWasBlock = false;
+    for (const child of current.childNodes) {
+      const fragment = render(child);
+      if (fragment.length === 0) {
+        continue;
+      }
+      const childIsBlock = child instanceof HTMLElement && isBlockElement(child);
+      if (
+        output.length > 0 &&
+        (previousWasBlock || childIsBlock) &&
+        !output.endsWith("\n") &&
+        !fragment.startsWith("\n")
+      ) {
+        output += "\n";
+      }
+      output += fragment;
+      previousWasBlock = childIsBlock;
+    }
+    return output;
+  };
+  const output = render(message);
+  if (output.length > MAX_OUTPUT_CHARACTERS) {
+    throw new Error("visible_message_too_large");
+  }
+  return output;
 }
 
 function serializeVisibleText(node: Node, maxCharacters: number): string {
