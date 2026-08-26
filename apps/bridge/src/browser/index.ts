@@ -1,3 +1,4 @@
+export * from "./agent-session-coordinator.js";
 export * from "./browser-application-port.js";
 export * from "./bridge-native-application-port.js";
 export * from "./browser-model-catalog.js";
