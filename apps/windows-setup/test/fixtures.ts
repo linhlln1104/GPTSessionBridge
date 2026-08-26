@@ -119,6 +119,10 @@ export async function createPackage(parent: string, packageVersion = "0.1.0"): P
     `native-host-${packageVersion}`,
   );
   await writeFile(
+    join(root, "native-host", "gptsessionbridge-facade.exe"),
+    `facade-${packageVersion}`,
+  );
+  await writeFile(
     join(root, "native-host", "chrome-windows.template.json"),
     `${JSON.stringify(
       {
@@ -156,6 +160,7 @@ export async function createPackage(parent: string, packageVersion = "0.1.0"): P
   await writeWindowsPackageManifest(
     root,
     {
+      facadeExecutable: "native-host/gptsessionbridge-facade.exe",
       hostExecutable: "native-host/gptsessionbridge-native-host.exe",
       packageVersion,
     },

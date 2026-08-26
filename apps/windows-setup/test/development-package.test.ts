@@ -113,6 +113,7 @@ describe("Windows development package contract", () => {
     "extension/popup/popup.css",
     "extension/popup/popup.html",
     "extension/popup/popup.js",
+    "native-host/gptsessionbridge-facade.exe",
     "native-host/gptsessionbridge-windows-ipc.exe",
   ])("rejects a self-consistent package missing required runtime artifact %s", async (path) => {
     const parent = await trackedTemporaryDirectory();
@@ -127,7 +128,13 @@ describe("Windows development package contract", () => {
     if (path === "extension/chunks/chrome-api.js") {
       await rm(join(packageRoot, "extension", "chunks"), { recursive: true });
     }
-    await rewritePackageManifest(packageRoot, "0.1.0");
+    await rewritePackageManifest(
+      packageRoot,
+      "0.1.0",
+      path === "native-host/gptsessionbridge-facade.exe"
+        ? "native-host/gptsessionbridge-native-host.exe"
+        : "native-host/gptsessionbridge-facade.exe",
+    );
 
     await expect(
       verifyWindowsDevelopmentPackage(packageRoot, { path: TEST_PATHS }),
@@ -150,11 +157,16 @@ async function rewriteExtensionManifest(
   await rewritePackageManifest(packageRoot, packageVersion);
 }
 
-async function rewritePackageManifest(packageRoot: string, packageVersion: string): Promise<void> {
+async function rewritePackageManifest(
+  packageRoot: string,
+  packageVersion: string,
+  facadeExecutable = "native-host/gptsessionbridge-facade.exe",
+): Promise<void> {
   await rm(join(packageRoot, "package-manifest.json"));
   await writeWindowsPackageManifest(
     packageRoot,
     {
+      facadeExecutable,
       hostExecutable: "native-host/gptsessionbridge-native-host.exe",
       packageVersion,
     },

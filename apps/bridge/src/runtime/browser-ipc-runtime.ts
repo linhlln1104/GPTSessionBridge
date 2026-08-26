@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 
 import { BRIDGE_IMPLEMENTATION_VERSION } from "@gpt-session-bridge/native-messaging/link";
@@ -15,10 +17,12 @@ export interface BrowserIpcRuntime {
 }
 
 export function createDefaultBrowserIpcRuntime(
-  anchorUrl: string,
+  anchorUrl: string | undefined,
   platform: NodeJS.Platform = process.platform,
   architecture: string = process.arch,
   fileExists: (path: string) => boolean = existsSync,
+  packagedExecutable: string = process.execPath,
+  packaged: boolean = isSea(),
 ): BrowserIpcRuntime | undefined {
   if (platform !== "win32") {
     return undefined;
@@ -30,6 +34,8 @@ export function createDefaultBrowserIpcRuntime(
       platform,
       architecture,
       fileExists,
+      packagedExecutable,
+      packaged,
     );
   } catch (error) {
     if (error instanceof BridgeRuntimeError && error.code === "browser_ipc_unavailable") {
@@ -46,22 +52,33 @@ export function createDefaultBrowserIpcRuntime(
 }
 
 export function resolveWindowsIpcHelperExecutable(
-  anchorUrl: string,
+  anchorUrl: string | undefined,
   platform: NodeJS.Platform = process.platform,
   architecture: string = process.arch,
   fileExists: (path: string) => boolean = existsSync,
+  packagedExecutable: string = process.execPath,
+  packaged: boolean = isSea(),
 ): string {
   if (platform !== "win32" || architecture !== "x64") {
     throw new BridgeRuntimeError("browser_ipc_unavailable");
   }
-  const candidate = fileURLToPath(
+  const candidate = packaged
+    ? resolve(dirname(packagedExecutable), "gptsessionbridge-windows-ipc.exe")
+    : resolveDevelopmentHelper(anchorUrl);
+  if (!fileExists(candidate)) {
+    throw new BridgeRuntimeError("browser_ipc_unavailable");
+  }
+  return candidate;
+}
+
+function resolveDevelopmentHelper(anchorUrl: string | undefined): string {
+  if (anchorUrl === undefined) {
+    throw new BridgeRuntimeError("browser_ipc_unavailable");
+  }
+  return fileURLToPath(
     new URL(
       "../../../native/windows-ipc/artifacts/win-x64/gptsessionbridge-windows-ipc.exe",
       anchorUrl,
     ),
   );
-  if (!fileExists(candidate)) {
-    throw new BridgeRuntimeError("browser_ipc_unavailable");
-  }
-  return candidate;
 }

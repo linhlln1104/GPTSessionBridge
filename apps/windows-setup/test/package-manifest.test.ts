@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   NODE_FILE_SYSTEM,
+  PACKAGE_MANIFEST_SCHEMA_VERSION,
   WindowsSetupError,
   parseWindowsPackageManifest,
   serializeWindowsPackageManifest,
@@ -32,6 +33,7 @@ describe("Windows package manifest", () => {
     const verified = await verifyWindowsPackage(root, { path: TEST_PATHS });
 
     expect(verified.manifest.packageVersion).toBe("1.2.3.4");
+    expect(verified.manifest.facadeExecutable).toBe("native-host/gptsessionbridge-facade.exe");
     expect(verified.manifest.hostExecutable).toBe("native-host/gptsessionbridge-native-host.exe");
     expect(verified.manifest.files.map((file) => file.path)).toEqual([
       "extension/background/service-worker.js",
@@ -42,6 +44,7 @@ describe("Windows package manifest", () => {
       "extension/popup/popup.html",
       "extension/popup/popup.js",
       "native-host/chrome-windows.template.json",
+      "native-host/gptsessionbridge-facade.exe",
       "native-host/gptsessionbridge-native-host.exe",
       "native-host/gptsessionbridge-windows-ipc.exe",
     ]);
@@ -58,15 +61,19 @@ describe("Windows package manifest", () => {
       size: 1,
     };
     const base = {
+      facadeExecutable: validFile.path,
       files: [validFile],
       hostExecutable: validFile.path,
       packageVersion: "1.0.0",
-      schemaVersion: 1,
+      schemaVersion: PACKAGE_MANIFEST_SCHEMA_VERSION,
     };
 
     expect(() => parseWindowsPackageManifest(JSON.stringify({ ...base, extra: true }))).toThrow(
       WindowsSetupError,
     );
+    expect(() =>
+      parseWindowsPackageManifest(JSON.stringify({ ...base, schemaVersion: 1 })),
+    ).toThrow(expect.objectContaining({ code: "invalid_package_manifest" }));
     expect(() =>
       parseWindowsPackageManifest(
         JSON.stringify({ ...base, hostExecutable: "../native-host/host.exe" }),
@@ -197,9 +204,10 @@ describe("Windows package manifest", () => {
             { path: "Host/app.exe", sha256: "0".repeat(64), size: 1 },
             { path: "host/app.exe", sha256: "1".repeat(64), size: 1 },
           ],
+          facadeExecutable: "Host/app.exe",
           hostExecutable: "Host/app.exe",
           packageVersion: "1.0.0",
-          schemaVersion: 1,
+          schemaVersion: PACKAGE_MANIFEST_SCHEMA_VERSION,
         }),
       ),
     ).toThrow(expect.objectContaining({ code: "invalid_package_manifest" }));
@@ -219,7 +227,11 @@ describe("Windows package manifest", () => {
     await expect(
       writeWindowsPackageManifest(
         root,
-        { hostExecutable: "native-host/host.exe", packageVersion: "1.0.0" },
+        {
+          facadeExecutable: "native-host/host.exe",
+          hostExecutable: "native-host/host.exe",
+          packageVersion: "1.0.0",
+        },
         { path: TEST_PATHS },
       ),
     ).rejects.toMatchObject({ code: "invalid_package_path" });
@@ -232,7 +244,11 @@ describe("Windows package manifest", () => {
     await expect(
       writeWindowsPackageManifest(
         root,
-        { hostExecutable: "native-host/gptsessionbridge-native-host.exe", packageVersion: "0.1.0" },
+        {
+          facadeExecutable: "native-host/gptsessionbridge-facade.exe",
+          hostExecutable: "native-host/gptsessionbridge-native-host.exe",
+          packageVersion: "0.1.0",
+        },
         { path: TEST_PATHS },
       ),
     ).rejects.toMatchObject({ code: "filesystem_conflict" });

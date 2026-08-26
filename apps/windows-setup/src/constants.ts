@@ -5,7 +5,9 @@ export const DEVELOPMENT_NATIVE_HOST_NAME = "com.gptsessionbridge.native_host.de
 export const NATIVE_HOST_DESCRIPTION =
   "GPTSessionBridge Native Messaging host (development)" as const;
 export const PACKAGE_MANIFEST_FILENAME = "package-manifest.json" as const;
-export const PACKAGE_MANIFEST_SCHEMA_VERSION = 1 as const;
+export const PACKAGE_MANIFEST_SCHEMA_VERSION = 2 as const;
+export const DEVELOPMENT_FACADE_EXECUTABLE_PATH =
+  "native-host/gptsessionbridge-facade.exe" as const;
 export const DEVELOPMENT_HOST_EXECUTABLE_PATH =
   "native-host/gptsessionbridge-native-host.exe" as const;
 export const DEVELOPMENT_HELPER_EXECUTABLE_PATH =

@@ -108,6 +108,10 @@ describe("Windows development host setup", () => {
       "64": result.manifestPath,
     });
     expect(result.extensionPath).toBe(join(dirname(result.executablePath), "..", "extension"));
+    expect(result.facadeExecutablePath).toBe(
+      join(dirname(result.executablePath), "gptsessionbridge-facade.exe"),
+    );
+    await expect(access(result.facadeExecutablePath)).resolves.toBeUndefined();
     await expect(access(join(result.extensionPath, "manifest.json"))).resolves.toBeUndefined();
     expect(JSON.parse(await readFile(result.manifestPath, "utf8"))).toEqual({
       allowed_origins: [DEVELOPMENT_EXTENSION_ORIGIN],
@@ -152,6 +156,7 @@ describe("Windows development host setup", () => {
     await expect(getWindowsDevelopmentHostStatus(dependencies)).resolves.toEqual(
       expect.objectContaining({
         extensionPath: first.extensionPath,
+        facadeExecutablePath: first.facadeExecutablePath,
         packageDigest: first.packageDigest,
         state: "installed",
       }),
@@ -448,6 +453,7 @@ describe("Windows development host setup", () => {
     await writeWindowsPackageManifest(
       source,
       {
+        facadeExecutable: "native-host/gptsessionbridge-facade.exe",
         hostExecutable: "native-host/gptsessionbridge-native-host.exe",
         packageVersion: "0.1.0",
       },
@@ -477,6 +483,7 @@ describe("Windows development host setup", () => {
     await writeWindowsPackageManifest(
       wrongTemplate,
       {
+        facadeExecutable: "native-host/gptsessionbridge-facade.exe",
         hostExecutable: "native-host/gptsessionbridge-native-host.exe",
         packageVersion: "0.3.0",
       },

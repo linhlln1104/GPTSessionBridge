@@ -99,6 +99,34 @@ describe("Windows browser IPC runtime", () => {
     expect(() =>
       resolveWindowsIpcHelperExecutable(syntheticCliUrl, "win32", "x64", () => false),
     ).toThrow(expect.objectContaining({ code: "browser_ipc_unavailable" }));
+    expect(() =>
+      resolveWindowsIpcHelperExecutable(
+        undefined,
+        "win32",
+        "x64",
+        () => true,
+        process.execPath,
+        false,
+      ),
+    ).toThrow(expect.objectContaining({ code: "browser_ipc_unavailable" }));
+
+    let packagedCandidate = "";
+    expect(
+      resolveWindowsIpcHelperExecutable(
+        undefined,
+        "win32",
+        "x64",
+        (candidate) => {
+          packagedCandidate = candidate;
+          return true;
+        },
+        "C:/Program Files/GPTSessionBridge/gptsessionbridge-facade.exe",
+        true,
+      ),
+    ).toBe(packagedCandidate);
+    expect(packagedCandidate.replaceAll("\\", "/")).toBe(
+      "C:/Program Files/GPTSessionBridge/gptsessionbridge-windows-ipc.exe",
+    );
   });
 
   it("enables the broker only on the supported Windows platform", async () => {
@@ -114,6 +142,26 @@ describe("Windows browser IPC runtime", () => {
     expect(createDefaultBrowserIpcRuntime(syntheticCliUrl, "win32", "x64", () => false)).toBe(
       undefined,
     );
+    expect(
+      createDefaultBrowserIpcRuntime(
+        undefined,
+        "win32",
+        "x64",
+        () => true,
+        process.execPath,
+        false,
+      ),
+    ).toBeUndefined();
+    const packagedRuntime = createDefaultBrowserIpcRuntime(
+      undefined,
+      "win32",
+      "x64",
+      () => true,
+      "C:/Program Files/GPTSessionBridge/gptsessionbridge-facade.exe",
+      true,
+    );
+    expect(packagedRuntime).toBeDefined();
+    await packagedRuntime?.close();
   });
 });
 

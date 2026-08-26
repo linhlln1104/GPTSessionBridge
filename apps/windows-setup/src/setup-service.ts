@@ -41,6 +41,7 @@ export interface WindowsSetupDependencies {
 export interface InstalledWindowsSetupStatus {
   readonly executablePath: string;
   readonly extensionPath: string;
+  readonly facadeExecutablePath: string;
   readonly hostName: typeof DEVELOPMENT_NATIVE_HOST_NAME;
   readonly manifestPath: string;
   readonly packageDigest: string;
@@ -152,6 +153,11 @@ export async function installWindowsDevelopmentHost(
     sourcePackage.manifest.hostExecutable,
     resolved.path,
   );
+  const facadeExecutablePath = resolvePortablePath(
+    materializedPackage.path,
+    sourcePackage.manifest.facadeExecutable,
+    resolved.path,
+  );
   const extensionPath = resolved.path.join(materializedPackage.path, "extension");
   const chromeManifest = serializeChromeNativeMessagingManifest(executablePath, resolved.path);
   const registrationPath = resolved.path.join(
@@ -180,6 +186,7 @@ export async function installWindowsDevelopmentHost(
   return Object.freeze({
     executablePath,
     extensionPath,
+    facadeExecutablePath,
     hostName: DEVELOPMENT_NATIVE_HOST_NAME,
     manifestPath: registrationPath,
     packageCreated: materializedPackage.created,
@@ -487,6 +494,11 @@ async function inspectManagedRegistration(
     verifiedPackage.manifest.hostExecutable,
     resolved.path,
   );
+  const facadeExecutablePath = resolvePortablePath(
+    packageRoot,
+    verifiedPackage.manifest.facadeExecutable,
+    resolved.path,
+  );
   const extensionPath = resolved.path.join(packageRoot, "extension");
   const extensionNode = await resolved.fileSystem.inspect(extensionPath);
   if (extensionNode?.kind !== "directory") {
@@ -503,6 +515,7 @@ async function inspectManagedRegistration(
     status: Object.freeze({
       executablePath,
       extensionPath,
+      facadeExecutablePath,
       hostName: DEVELOPMENT_NATIVE_HOST_NAME,
       manifestPath,
       packageDigest,

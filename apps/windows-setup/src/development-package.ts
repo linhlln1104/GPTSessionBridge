@@ -4,6 +4,7 @@ import {
   DEVELOPMENT_EXTENSION_ID,
   DEVELOPMENT_EXTENSION_MANIFEST_PATH,
   DEVELOPMENT_EXTENSION_ORIGIN,
+  DEVELOPMENT_FACADE_EXECUTABLE_PATH,
   DEVELOPMENT_HELPER_EXECUTABLE_PATH,
   DEVELOPMENT_HOST_EXECUTABLE_PATH,
   DEVELOPMENT_HOST_TEMPLATE_PATH,
@@ -63,12 +64,16 @@ async function validateDevelopmentPackageContract(
   verifiedPackage: VerifiedWindowsPackage,
   resolved: ResolvedDevelopmentPackageDependencies,
 ): Promise<void> {
-  if (verifiedPackage.manifest.hostExecutable !== DEVELOPMENT_HOST_EXECUTABLE_PATH) {
+  if (
+    verifiedPackage.manifest.facadeExecutable !== DEVELOPMENT_FACADE_EXECUTABLE_PATH ||
+    verifiedPackage.manifest.hostExecutable !== DEVELOPMENT_HOST_EXECUTABLE_PATH
+  ) {
     throw new WindowsSetupError("invalid_package_manifest");
   }
   const requiredFiles = [
     DEVELOPMENT_EXTENSION_MANIFEST_PATH,
     ...DEVELOPMENT_EXTENSION_RUNTIME_PATHS,
+    DEVELOPMENT_FACADE_EXECUTABLE_PATH,
     DEVELOPMENT_HELPER_EXECUTABLE_PATH,
     DEVELOPMENT_HOST_EXECUTABLE_PATH,
     DEVELOPMENT_HOST_TEMPLATE_PATH,

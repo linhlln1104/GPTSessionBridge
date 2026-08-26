@@ -26,6 +26,7 @@ export interface WindowsPackageFile {
 }
 
 export interface WindowsPackageManifest {
+  readonly facadeExecutable: string;
   readonly files: readonly WindowsPackageFile[];
   readonly hostExecutable: string;
   readonly packageVersion: string;
@@ -33,6 +34,7 @@ export interface WindowsPackageManifest {
 }
 
 export interface WindowsPackageManifestMetadata {
+  readonly facadeExecutable: string;
   readonly hostExecutable: string;
   readonly packageVersion: string;
 }
@@ -51,13 +53,11 @@ export async function createWindowsPackageManifest(
 ): Promise<WindowsPackageManifest> {
   const { fileSystem, paths } = resolvePackageDependencies(dependencies);
   const packageVersion = validatePackageVersion(metadata.packageVersion);
-  const hostExecutable = validatePortablePackagePath(metadata.hostExecutable);
-  if (!hostExecutable.toLocaleLowerCase("en-US").endsWith(".exe")) {
-    throw new WindowsSetupError("invalid_package_manifest");
-  }
+  const facadeExecutable = validateExecutablePath(metadata.facadeExecutable);
+  const hostExecutable = validateExecutablePath(metadata.hostExecutable);
 
   const filePaths = await listPackageFiles(packageRoot, fileSystem, paths);
-  if (!filePaths.includes(hostExecutable)) {
+  if (!filePaths.includes(facadeExecutable) || !filePaths.includes(hostExecutable)) {
     throw new WindowsSetupError("artifact_missing");
   }
   const files: WindowsPackageFile[] = [];
@@ -77,6 +77,7 @@ export async function createWindowsPackageManifest(
     files.push(Object.freeze({ path, sha256: hash.sha256, size: hash.size }));
   }
   return freezeManifest({
+    facadeExecutable,
     files,
     hostExecutable,
     packageVersion,
@@ -122,18 +123,20 @@ export function parseWindowsPackageManifest(text: string): WindowsPackageManifes
     throw new WindowsSetupError("invalid_package_manifest");
   }
   const packageVersion = validatePackageVersion(parsed["packageVersion"]);
-  const hostExecutable = validatePortablePackagePath(parsed["hostExecutable"]);
-  if (!hostExecutable.toLocaleLowerCase("en-US").endsWith(".exe")) {
-    throw new WindowsSetupError("invalid_package_manifest");
-  }
+  const facadeExecutable = validateExecutablePath(parsed["facadeExecutable"]);
+  const hostExecutable = validateExecutablePath(parsed["hostExecutable"]);
 
   const files = parsed["files"].map(parsePackageFile);
   assertTotalPackageSize(files);
   assertCanonicalFileOrder(files);
-  if (!files.some((file) => file.path === hostExecutable)) {
+  if (
+    !files.some((file) => file.path === facadeExecutable) ||
+    !files.some((file) => file.path === hostExecutable)
+  ) {
     throw new WindowsSetupError("invalid_package_manifest");
   }
   return freezeManifest({
+    facadeExecutable,
     files,
     hostExecutable,
     packageVersion,
@@ -209,7 +212,13 @@ export async function verifyWindowsPackage(
   });
 }
 
-const MANIFEST_KEYS = Object.freeze(["files", "hostExecutable", "packageVersion", "schemaVersion"]);
+const MANIFEST_KEYS = Object.freeze([
+  "facadeExecutable",
+  "files",
+  "hostExecutable",
+  "packageVersion",
+  "schemaVersion",
+]);
 const FILE_KEYS = Object.freeze(["path", "sha256", "size"]);
 
 function parseManifestValue(value: WindowsPackageManifest): WindowsPackageManifest {
@@ -262,6 +271,14 @@ function validatePackageVersion(value: unknown): string {
     throw new WindowsSetupError("invalid_package_manifest");
   }
   return value;
+}
+
+function validateExecutablePath(value: unknown): string {
+  const path = validatePortablePackagePath(value);
+  if (!path.toLocaleLowerCase("en-US").endsWith(".exe")) {
+    throw new WindowsSetupError("invalid_package_manifest");
+  }
+  return path;
 }
 
 function assertCanonicalFileOrder(files: readonly WindowsPackageFile[]): void {
@@ -344,6 +361,7 @@ async function listPackageFiles(
 
 function freezeManifest(manifest: WindowsPackageManifest): WindowsPackageManifest {
   return Object.freeze({
+    facadeExecutable: manifest.facadeExecutable,
     files: Object.freeze([...manifest.files]),
     hostExecutable: manifest.hostExecutable,
     packageVersion: manifest.packageVersion,

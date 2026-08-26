@@ -19,6 +19,17 @@ const FAKE_APP_SERVER = fileURLToPath(
 const TOML_LINE_CONTINUATION = String.fromCodePoint(0x5c, 0x0a);
 
 describe("CLI command routing", () => {
+  it("recognizes the exact current Codex VS Code extension launch arguments", () => {
+    expect(
+      isAppServerInvocation([
+        "-c",
+        "features.code_mode_host=true",
+        "app-server",
+        "--analytics-default-enabled",
+      ]),
+    ).toBe(true);
+  });
+
   it("recognizes only the top-level app-server subcommand", () => {
     expect(isAppServerInvocation(["-c", "features.example=true", "app-server"])).toBe(true);
     expect(isAppServerInvocation(["-cfeatures.example=true", "app-server"])).toBe(true);

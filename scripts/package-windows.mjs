@@ -9,6 +9,7 @@ import { writeWindowsPackageManifest } from "../apps/windows-setup/dist/index.js
 import { BRIDGE_IMPLEMENTATION_VERSION } from "../packages/native-messaging/dist/link/index.js";
 
 const SEA_FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
+const FACADE_EXECUTABLE = "gptsessionbridge-facade.exe";
 const HOST_EXECUTABLE = "gptsessionbridge-native-host.exe";
 const HELPER_EXECUTABLE = "gptsessionbridge-windows-ipc.exe";
 const arguments_ = process.argv.slice(2);
@@ -80,51 +81,20 @@ try {
     throw new Error("The Windows IPC helper version must match the package version.");
   }
 
-  const bundlePath = resolve(buildRoot, "native-host.cjs");
-  await build({
-    bundle: true,
-    define: { "import.meta.url": "undefined" },
-    entryPoints: [resolve(repositoryRoot, "apps/native-host/src/sea-entry.ts")],
-    format: "cjs",
-    legalComments: "none",
-    logLevel: "warning",
-    minify: false,
-    outfile: bundlePath,
-    platform: "node",
-    sourcemap: false,
-    target: "node24",
-  });
-
-  const blobPath = resolve(buildRoot, "native-host.blob");
-  const seaConfigPath = resolve(buildRoot, "sea-config.json");
-  await writeFile(
-    seaConfigPath,
-    `${JSON.stringify(
-      {
-        disableExperimentalSEAWarning: true,
-        main: "native-host.cjs",
-        output: "native-host.blob",
-        useCodeCache: false,
-      },
-      undefined,
-      2,
-    )}\n`,
-    { encoding: "utf8", flag: "wx" },
-  );
-  run(process.execPath, ["--experimental-sea-config", "sea-config.json"], buildRoot);
-
   const hostExecutablePath = resolve(nativeHostRoot, HOST_EXECUTABLE);
-  await copyFile(process.execPath, hostExecutablePath);
-  const postjectApiUrl = import.meta.resolve("postject");
-  const postjectCli = fileURLToPath(new URL("cli.js", postjectApiUrl));
-  run(process.execPath, [
-    postjectCli,
-    hostExecutablePath,
-    "NODE_SEA_BLOB",
-    blobPath,
-    "--sentinel-fuse",
-    SEA_FUSE,
-  ]);
+  const facadeExecutablePath = resolve(nativeHostRoot, FACADE_EXECUTABLE);
+  await packageSeaExecutable({
+    buildName: "native-host",
+    buildRoot,
+    entryPoint: resolve(repositoryRoot, "apps/native-host/src/sea-entry.ts"),
+    executablePath: hostExecutablePath,
+  });
+  await packageSeaExecutable({
+    buildName: "facade",
+    buildRoot,
+    entryPoint: resolve(repositoryRoot, "apps/bridge/src/sea-entry.ts"),
+    executablePath: facadeExecutablePath,
+  });
 
   await Promise.all([
     copyFile(resolve(repositoryRoot, "LICENSE"), resolve(stagingRoot, "LICENSE")),
@@ -149,6 +119,7 @@ try {
 
   await rm(buildRoot, { force: true, recursive: true });
   await writeWindowsPackageManifest(stagingRoot, {
+    facadeExecutable: `native-host/${FACADE_EXECUTABLE}`,
     hostExecutable: `native-host/${HOST_EXECUTABLE}`,
     packageVersion,
   });
@@ -159,6 +130,52 @@ try {
 } catch (error) {
   await rm(stagingRoot, { force: true, recursive: true });
   throw error;
+}
+
+async function packageSeaExecutable({ buildName, buildRoot, entryPoint, executablePath }) {
+  const bundleFilename = `${buildName}.cjs`;
+  const blobFilename = `${buildName}.blob`;
+  const configFilename = `${buildName}-sea-config.json`;
+  const bundlePath = resolve(buildRoot, bundleFilename);
+  const blobPath = resolve(buildRoot, blobFilename);
+  await build({
+    bundle: true,
+    define: { "import.meta.url": "undefined" },
+    entryPoints: [entryPoint],
+    format: "cjs",
+    legalComments: "none",
+    logLevel: "warning",
+    minify: false,
+    outfile: bundlePath,
+    platform: "node",
+    sourcemap: false,
+    target: "node24",
+  });
+  await writeFile(
+    resolve(buildRoot, configFilename),
+    `${JSON.stringify(
+      {
+        disableExperimentalSEAWarning: true,
+        main: bundleFilename,
+        output: blobFilename,
+        useCodeCache: false,
+      },
+      undefined,
+      2,
+    )}\n`,
+    { encoding: "utf8", flag: "wx" },
+  );
+  run(process.execPath, ["--experimental-sea-config", configFilename], buildRoot);
+  await copyFile(process.execPath, executablePath);
+  const postjectCli = fileURLToPath(new URL("cli.js", import.meta.resolve("postject")));
+  run(process.execPath, [
+    postjectCli,
+    executablePath,
+    "NODE_SEA_BLOB",
+    blobPath,
+    "--sentinel-fuse",
+    SEA_FUSE,
+  ]);
 }
 
 async function readJson(path) {
