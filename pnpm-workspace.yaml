@@ -4,7 +4,7 @@ packages:
 
 catalog:
   "@vitest/browser-playwright": 4.1.11
-  "@types/node": 24.13.3
+  "@types/node": 26.4.0
   "@vitest/coverage-v8": 4.1.11
   playwright: 1.62.1
   typescript: 6.0.3
