@@ -9,4 +9,4 @@ catalog:
   playwright: 1.62.1
   typescript: 6.0.3
   vitest: 4.1.11
-  zod: 4.4.3
+  zod: 4.5.4
