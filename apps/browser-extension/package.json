@@ -25,7 +25,7 @@
     "@vitest/coverage-v8": "catalog:",
     "playwright": "catalog:",
     "typescript": "catalog:",
-    "vite": "8.2.2",
+    "vite": "8.3.0",
     "vitest": "catalog:"
   },
   "engines": {
